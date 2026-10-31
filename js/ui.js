@@ -16,7 +16,7 @@ export function setLoot(l) {
   el.lootFill.style.transform = `scaleX(${l})`;
   el.lootTxt.textContent = l <= 0 ? '금고 안전' : `약탈 ${v}%`;
 }
-export function setAmmo(txt) { if (txt === lastAmmo) return; lastAmmo = txt; el.ammoTxt.textContent = txt; }
+export function setAmmo(txt) { if (txt === lastAmmo) return; lastAmmo = txt; G.controls?.setBadge('fire', txt); G.controls?.setBadge('leftFire', txt.split(' ')[0]); }
 export function setScrap(n) { if (n === lastScrap) return; lastScrap = n; el.scrapTxt.textContent = n; }
 export function setRoute(f) {
   const v = Math.round(f * 400) / 400; if (v === lastRoute) return; lastRoute = v;
@@ -100,8 +100,8 @@ export function indicators(list) {
   for (; k < arrows.length; k++) arrows[k].style.display = 'none';
 }
 export function setCharges(n, cd) {
-  el.dynN.textContent = n;
-  el.btnDyn.classList.toggle('empty', n <= 0);
-  el.dynCd.style.transform = `scaleY(${cd})`;
+  G.controls?.setBadge('grenade', n);
+  G.controls?.setCooldown('grenade', n <= 0 ? Math.max(cd, 0.02) : 0);
+  G.controls?.setDisabled('grenade', n <= 0);
 }
 export function show(id, on) { el[id].classList.toggle('hidden', !on); }

@@ -15,7 +15,7 @@ import { initAudio, sfx, loop, setLoop, suspendAudio } from './audio.js';
 
 const el = UI.el;
 const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
-G.sens = parseFloat(store.get('dr_sens') || '1'); el.sens.value = G.sens;
+G.sens = 1;   // PC 마우스 감도 (터치 감도는 조작 설정에서)
 
 // ── 부팅 ───────────────────────────────────────────────
 initRenderer(el.c);
@@ -37,6 +37,7 @@ loadModels((f) => { el.loadTxt.textContent = `짐 싣는 중… ${Math.round(f *
 // ── 화면 전환 ──────────────────────────────────────────
 function setState(s) {
   G.state = s;
+  G.controls?.setVisible(s === 'play');
   UI.show('hud', s === 'play' || s === 'pause');
   UI.show('title', s === 'title'); UI.show('pause', s === 'pause'); UI.show('shop', s === 'shop'); UI.show('over', s === 'over');
   if (s !== 'play' && document.pointerLockElement) document.exitPointerLock?.();
@@ -63,11 +64,21 @@ function startStage() {
 }
 el.btnStart.addEventListener('click', startRun);
 el.btnPause.addEventListener('click', () => { setState('pause'); suspendAudio(true); });
+let settingsBuilt = false;
+const openSettings = () => {
+  if (!settingsBuilt && G.controls) {
+    settingsBuilt = true;
+    G.controls.buildSettings(el.ctrlSettings, { onEditLayout: () => {
+      UI.show('pause', false);
+      G.controls.openEditor(() => { UI.show('pause', true); G.controls.setVisible(false); });
+    } });
+  }
+};
+new MutationObserver(() => { if (!el.pause.classList.contains('hidden')) openSettings(); }).observe(el.pause, { attributes: true, attributeFilter: ['class'] });
 el.btnResume.addEventListener('click', () => { setState('play'); suspendAudio(false); });
 el.btnQuit.addEventListener('click', () => { clearEnemies(); suspendAudio(false); setState('title'); });
 el.btnRetry.addEventListener('click', startRun);
 el.btnHome.addEventListener('click', () => { clearEnemies(); setState('title'); });
-el.sens.addEventListener('input', () => { G.sens = parseFloat(el.sens.value); store.set('dr_sens', G.sens); });
 el.sfxToggle.addEventListener('change', () => { G.sfx = el.sfxToggle.checked; });
 el.btnDepart.addEventListener('click', () => { G.stage++; startStage(); setState('play'); sfx('toggle'); });
 addEventListener('keydown', (e) => { if (e.code === 'Escape' || e.code === 'KeyP') { if (G.state === 'play') { setState('pause'); suspendAudio(true); } else if (G.state === 'pause') { setState('play'); suspendAudio(false); } } });

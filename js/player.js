@@ -2,7 +2,8 @@
 import * as THREE from 'three';
 import { G, TRAIN, clamp, lerp, rand, damp } from './state.js';
 import { moveBody, rayBoxes, groundAt, updateSunFollow, onTrain } from './world.js';
-import { raycastEnemies, aimAssistTarget, meleeHit, nearestBoarder, explodeAt, enemies } from './enemies.js';
+import { raycastEnemies, aimAssistTarget, meleeHit, nearestBoarder, explodeAt, enemies, assistTargets } from './enemies.js';
+import { MobileFPSControls } from './controls/mfc.js';
 import * as UI from './ui.js';
 import { sfx, gunshot } from './audio.js';
 import { tracer, muzzleWorld, sparks, puff, shake, addShake, smoke } from './fx.js';
@@ -12,87 +13,41 @@ export const P = {
   hp: 100, maxHp: 100, crouch: false, onGround: true, climbing: null,
   mounted: false, ammo: 8, mag: 8, reload: 0, fireCd: 0, lever: 0, recoil: 0, lastHurt: 0,
   heat: 0, overheat: false, eye: 1.6, bob: 0, dead: false, firing: false, aimKick: 0,
-  ads: 0, adsOn: false, sprint: false, melee: 0, dyn: 3, dynCd: 0, fov: 72,
+  ads: 0, adsOn: false, sprint: false, melee: 0, dyn: 3, dynCd: 0, fov: 72, slideT: 0,
 };
-const input = { mx: 0, my: 0, keys: {}, lookDX: 0, lookDY: 0, jump: false, throw: false };
+const input = { keys: {}, lookDX: 0, lookDY: 0, jump: false, throw: false, mouseFire: false, mouseAds: false };
 
 // ── 입력 ───────────────────────────────────────────────
+// 터치는 MobileFPSControls(controls/mfc.js)가 전부 맡고, 여기서는 PC 테스트용 키보드·마우스만 받는다.
 export function initInput() {
-  const stickZone = UI.el.stickZone, stick = UI.el.stick, knob = UI.el.stickKnob;
-  let stickId = null, sx = 0, sy = 0;
-  const R = 58;
-  stickZone.addEventListener('pointerdown', (e) => {
-    if (stickId !== null) return;
-    stickId = e.pointerId; sx = e.clientX; sy = e.clientY;
-    stick.style.transform = `translate(${sx}px, ${sy}px)`; stick.classList.remove('hidden');
-    knob.style.transform = 'translate(0,0)';
-    stickZone.setPointerCapture(e.pointerId);
-  });
-  stickZone.addEventListener('pointermove', (e) => {
-    if (e.pointerId !== stickId) return;
-    let dx = e.clientX - sx, dy = e.clientY - sy; const L = Math.hypot(dx, dy);
-    // 손가락이 멀리 가면 스틱 중심이 따라온다 (방향 바꾸기 쉬움)
-    if (L > R * 1.35) { sx += dx * (1 - R * 1.35 / L); sy += dy * (1 - R * 1.35 / L); stick.style.transform = `translate(${sx}px, ${sy}px)`; dx = e.clientX - sx; dy = e.clientY - sy; }
-    const L2 = Math.hypot(dx, dy); const k = L2 > R ? R / L2 : 1;
-    knob.style.transform = `translate(${dx * k}px, ${dy * k}px)`;
-    let mx = dx / R, my = -dy / R; const m = Math.hypot(mx, my);
-    if (m < 0.12) { mx = my = 0; }                               // 데드존
-    input.mx = mx; input.my = my; input.mag = m;
-    stick.classList.toggle('sprint', m > 1.0);
-  });
-  const endStick = (e) => { if (e.pointerId !== stickId) return; stickId = null; input.mx = input.my = input.mag = 0; stick.classList.add('hidden'); stick.classList.remove('sprint'); };
-  stickZone.addEventListener('pointerup', endStick); stickZone.addEventListener('pointercancel', endStick);
-
-  // 시점: 캔버스 위 아무 곳 (손가락마다 따로 추적)
-  const looks = new Map();
   const canvas = G.renderer.domElement;
-  const lookStart = (e) => { looks.set(e.pointerId, { x: e.clientX, y: e.clientY }); };
-  const lookMove = (e) => {
-    const l = looks.get(e.pointerId); if (!l) return;
-    let dx = e.clientX - l.x, dy = e.clientY - l.y; l.x = e.clientX; l.y = e.clientY;
-    // 가속: 빠르게 휙 돌리면 더 많이, 천천히 미세 조준은 그대로
-    const sp = Math.hypot(dx, dy), acc = 1 + Math.min(0.9, Math.max(0, sp - 6) * 0.035);
-    input.lookDX += dx * acc; input.lookDY += dy * acc;
-  };
-  const lookEnd = (e) => looks.delete(e.pointerId);
-  canvas.addEventListener('pointerdown', (e) => {
-    if (e.pointerType === 'mouse') { if (G.state === 'play' && document.pointerLockElement !== canvas) canvas.requestPointerLock?.(); return; }
-    lookStart(e); canvas.setPointerCapture(e.pointerId);
-  });
-  canvas.addEventListener('pointermove', (e) => { if (e.pointerType !== 'mouse') lookMove(e); });
-  canvas.addEventListener('pointerup', lookEnd); canvas.addEventListener('pointercancel', lookEnd);
-
-  // 발사 버튼: 누르면 사격, 누른 채 끌면 조준
-  const fire = UI.el.btnFire;
-  fire.addEventListener('pointerdown', (e) => { P.firing = true; fire.classList.add('on'); lookStart(e); fire.setPointerCapture(e.pointerId); });
-  fire.addEventListener('pointermove', lookMove);
-  const fireEnd = (e) => { P.firing = false; fire.classList.remove('on'); lookEnd(e); };
-  fire.addEventListener('pointerup', fireEnd); fire.addEventListener('pointercancel', fireEnd);
-  UI.el.btnJump.addEventListener('pointerdown', () => { input.jump = true; });
-  UI.el.btnCrouch.addEventListener('pointerdown', () => setCrouch(!P.crouch));
-  UI.el.btnReload.addEventListener('pointerdown', () => startReload());
-  UI.el.btnAim.addEventListener('pointerdown', () => setAds(!P.adsOn));
-  UI.el.btnDyn.addEventListener('pointerdown', () => { input.throw = true; });
+  G.controls = new MobileFPSControls({ root: UI.el.hud, hooks: { targets: () => assistTargets(G.camera.position) } });
   UI.el.btnUse.addEventListener('pointerdown', () => UI.triggerUse());
-  for (const b of [fire, UI.el.btnJump, UI.el.btnCrouch, UI.el.btnReload, UI.el.btnUse, UI.el.btnAim, UI.el.btnDyn]) b.addEventListener('contextmenu', (e) => e.preventDefault());
-
-  // 키보드·마우스 (PC 테스트용)
+  UI.el.btnUse.addEventListener('contextmenu', (e) => e.preventDefault());
+  canvas.addEventListener('pointerdown', (e) => { if (e.pointerType === 'mouse' && G.state === 'play' && document.pointerLockElement !== canvas) canvas.requestPointerLock?.(); });
   addEventListener('keydown', (e) => {
     input.keys[e.code] = true;
     if (e.code === 'Space') input.jump = true;
-    if (e.code === 'KeyC' || e.code === 'ControlLeft') setCrouch(!P.crouch);
+    if (e.code === 'KeyC' || e.code === 'ControlLeft') { if (P.sprint) startSlide(); else setCrouch(!P.crouch); }
     if (e.code === 'KeyR') startReload();
     if (e.code === 'KeyE') UI.triggerUse();
     if (e.code === 'KeyG' || e.code === 'KeyQ') input.throw = true;
   });
   addEventListener('keyup', (e) => { input.keys[e.code] = false; });
   addEventListener('mousemove', (e) => { if (document.pointerLockElement === canvas) { input.lookDX += e.movementX * 0.55; input.lookDY += e.movementY * 0.55; } });
-  addEventListener('mousedown', (e) => { if (document.pointerLockElement !== canvas) return; if (e.button === 0) P.firing = true; if (e.button === 2) setAds(true); });
-  addEventListener('mouseup', (e) => { if (e.button === 0) P.firing = false; if (e.button === 2) setAds(false); });
+  addEventListener('mousedown', (e) => { if (document.pointerLockElement !== canvas) return; if (e.button === 0) input.mouseFire = true; if (e.button === 2) input.mouseAds = true; });
+  addEventListener('mouseup', (e) => { if (e.button === 0) input.mouseFire = false; if (e.button === 2) input.mouseAds = false; });
   addEventListener('contextmenu', (e) => e.preventDefault());
 }
-function setCrouch(on) { P.crouch = on; UI.el.btnCrouch.classList.toggle('on', on); }
-function setAds(on) { if (P.mounted) on = false; P.adsOn = on; UI.el.btnAim.classList.toggle('on', on); if (on) sfx('toggle', { vol: 0.25, rate: 1.6 }); }
+function setCrouch(on) { P.crouch = on; G.controls?.sync({ crouch: on }); }
+function setAds(on) { if (P.mounted) on = false; P.adsOn = on; G.controls?.sync({ ads: on }); }
+function startSlide() {
+  if (!P.onGround || P.slideT > 0 || P.mounted || P.climbing) return;
+  P.slideT = 0.75; setCrouch(true);
+  const sp = Math.hypot(P.vel.x, P.vel.z);
+  P.slideDir = sp > 1 ? { x: P.vel.x / sp, z: P.vel.z / sp } : { x: -Math.sin(P.yaw), z: -Math.cos(P.yaw) };
+  sfx('skid', { vol: 0.35, rate: 1.5 }); P.landKick = 0.06;
+}
 
 // ── 1인칭 소총 ─────────────────────────────────────────
 let rifle, lever, muzzleRef, vmFlash, vmLight;
@@ -139,7 +94,7 @@ export function resetPlayer(full) {
   if (full) P.hp = P.maxHp;
   P.mag = 8 + G.upgrades.mag * 3; P.ammo = P.mag; P.reload = 0; P.fireCd = 0.3;
   P.mounted = false; P.heat = 0; P.overheat = false; P.climbing = null; P.dead = false;
-  setCrouch(false); setAds(false);
+  setCrouch(false); setAds(false); P.slideT = 0;
   P.dyn = 3; P.dynCd = 0;
   P.holder.visible = true;
   for (const d of dyns) G.scene.remove(d.mesh); dyns.length = 0;
@@ -159,6 +114,7 @@ export function hurtPlayer(amount, from) {
   UI.hurtFlash(amount, ang);
   addShake(Math.min(0.25, amount / 80));
   sfx('enemy_hurt', { vol: 0.5, rate: 0.7 });
+  G.controls?.haptic('hurt');
   if (P.hp <= 0) { P.hp = 0; P.dead = true; }
 }
 
@@ -171,8 +127,8 @@ function shoot(isGun) {
   const moving = Math.hypot(P.vel.x, P.vel.z) > 0.5;
   let spread = isGun ? 0.016 : lerp((P.crouch ? 0.005 : 0.009) + (moving ? 0.012 : 0) + (P.onGround ? 0 : 0.03) + (P.sprint ? 0.02 : 0), 0.0015, P.ads);
   if (G.touch) {   // 모바일 조준 보정
-    const t = aimAssistTarget(O, D, isGun ? 0.07 : lerp(0.065, 0.035, P.ads));
-    if (t) { FWD.subVectors(t, O).normalize(); D.lerp(FWD, 0.75).normalize(); spread *= 0.4; }
+    const t = aimAssistTarget(O, D, isGun ? 0.05 : lerp(0.04, 0.025, P.ads));
+    if (t) { FWD.subVectors(t, O).normalize(); D.lerp(FWD, 0.6).normalize(); spread *= 0.5; }
   }
   D.x += rand(-spread, spread); D.y += rand(-spread, spread); D.z += rand(-spread, spread); D.normalize();
   const wallT = rayBoxes(O, D, 170);
@@ -238,27 +194,42 @@ function updateDynamite(dt) {
 // ── 매 프레임 ──────────────────────────────────────────
 export function updatePlayer(dt) {
   if (P.dead) return;
-  // 시점 (정조준이면 느리게, 적 근처면 살짝 끈적하게)
-  let k = (G.touch ? 0.0042 : 0.0024) * G.sens * lerp(1, 0.6, P.ads);
-  if (G.touch && !P.mounted) {
-    G.camera.getWorldDirection(D);
-    if (aimAssistTarget(G.camera.position, D, 0.05)) k *= 0.6;
-  }
-  P.yaw -= input.lookDX * k; P.pitch -= input.lookDY * k;
+  // 터치 조작 (시점·이동·버튼·이벤트)
+  const c = G.controls.update(dt, {
+    pos: G.camera.position, yaw: P.yaw, pitch: P.pitch, fov: G.camera.fov, baseFov: 72, adsAmt: P.ads,
+    moving: Math.hypot(P.vel.x, P.vel.z) > 0.6, sprinting: P.sprint,
+  });
+  const mk = 0.0024 * G.sens * lerp(1, 0.6, P.ads);           // 마우스(PC)
+  P.yaw += c.dyaw - input.lookDX * mk; P.pitch += c.dpitch - input.lookDY * mk;
   input.lookDX = input.lookDY = 0;
   P.pitch = clamp(P.pitch, -1.35, 1.35);
+  for (const ev of c.events) {
+    if (ev === 'jump') input.jump = true;
+    else if (ev === 'reload') startReload();
+    else if (ev === 'grenade') input.throw = true;
+    else if (ev === 'slide') startSlide();
+  }
+  if (G.touch) { if (c.crouch !== P.crouch && P.slideT <= 0) P.crouch = c.crouch; if (c.ads !== P.adsOn) P.adsOn = P.mounted ? false : c.ads; }
+  else P.adsOn = input.mouseAds && !P.mounted;
+  P.firing = c.fire || input.mouseFire;
 
-  let mx = input.mx, my = input.my;
+  let mx = c.move.x, my = c.move.y;
   if (input.keys.KeyW) my = 1; if (input.keys.KeyS) my = -1; if (input.keys.KeyA) mx = -1; if (input.keys.KeyD) mx = 1;
   const L = Math.hypot(mx, my); if (L > 1) { mx /= L; my /= L; }
-  P.sprint = !P.crouch && !P.adsOn && my > 0.5 && ((input.mag || 0) > 1.0 || input.keys.ShiftLeft) && P.onGround;
+  P.sprint = !P.crouch && !P.adsOn && !P.firing && my > 0.5 && (c.sprint || input.keys.ShiftLeft) && P.onGround && P.slideT <= 0;
 
   if (P.mounted) updateMounted(dt);
   else {
     const speed = P.crouch ? 2.3 : P.sprint ? 6.6 : P.adsOn ? 3.0 : 4.7;
     const sin = Math.sin(P.yaw), cos = Math.cos(P.yaw);
-    const wx = (mx * cos - my * sin) * speed, wz = (-mx * sin - my * cos) * speed;
-    const accel = P.onGround ? 16 : 5;
+    let wx = (mx * cos - my * sin) * speed, wz = (-mx * sin - my * cos) * speed;
+    let accel = P.onGround ? 16 : 5;
+    if (P.slideT > 0) {   // 슬라이딩: 달리던 방향으로 미끄러지며 감속
+      P.slideT -= dt;
+      const v = lerp(2.4, 9.0, Math.max(0, P.slideT) / 0.75);
+      wx = P.slideDir.x * v; wz = P.slideDir.z * v; accel = 30;
+      if (Math.random() < dt * 30) puff(new THREE.Vector3(P.pos.x, P.pos.y + 0.1, P.pos.z), 1, [0.8, 0.62, 0.45, 0.4]);
+    }
     P.vel.x = damp(P.vel.x, wx, accel, dt); P.vel.z = damp(P.vel.z, wz, accel, dt);
     const lad = nearLadder();
     if (!P.climbing && lad && (my > 0.35 || input.jump) && P.pos.y < lad.top - 0.3) { P.climbing = lad; sfx('land', { vol: 0.4, rate: 1.3 }); setAds(false); }
@@ -271,7 +242,7 @@ export function updatePlayer(dt) {
       if (my < -0.4) P.climbing = null;
       input.jump = false;
     } else {
-      if (input.jump && P.onGround) { P.vel.y = 7.3; P.onGround = false; sfx('jump_a', { vol: 0.35 }); if (P.crouch) setCrouch(false); }
+      if (input.jump && P.onGround) { P.vel.y = 7.3; P.onGround = false; P.slideT = 0; sfx('jump_a', { vol: 0.35 }); if (P.crouch) setCrouch(false); }
       input.jump = false;
       P.vel.y -= 22 * dt;
       const was = P.onGround;
@@ -286,10 +257,10 @@ export function updatePlayer(dt) {
   updateDynamite(dt);
 
   // 카메라
-  const eyeT = P.mounted ? 1.25 : P.crouch ? 1.05 : 1.6;
+  const eyeT = P.mounted ? 1.25 : P.slideT > 0 ? 0.85 : P.crouch ? 1.05 : 1.6;
   P.eye = damp(P.eye, eyeT, 12, dt);
   P.landKick = damp(P.landKick || 0, 0, 10, dt);
-  P.ads = damp(P.ads, P.adsOn && !P.mounted && P.reload <= 0 ? 1 : 0, 14, dt);
+  P.ads = damp(P.ads, P.adsOn && !P.mounted && P.reload <= 0 && !P.sprint ? 1 : 0, 14, dt);
   const cam = G.camera;
   const rumble = Math.sin(G.time * 29) * 0.003 + Math.sin(G.time * 11.3) * 0.004;
   const bobAmt = (P.sprint ? 1.6 : 1) * (1 - P.ads * 0.8);
@@ -300,7 +271,7 @@ export function updatePlayer(dt) {
   let sx = 0, sy = 0;
   if (shake.amp > 0) { sx = (Math.random() - 0.5) * shake.amp * 0.1; sy = (Math.random() - 0.5) * shake.amp * 0.1; }
   cam.rotation.set(P.pitch + P.aimKick + sy, P.yaw + sx, 0);
-  const fovT = P.mounted ? 70 : lerp(P.sprint ? 78 : 72, 46, P.ads);
+  const fovT = P.mounted ? 70 : lerp(P.sprint || P.slideT > 0 ? 78 : 72, 46, P.ads);
   P.fov = damp(P.fov, fovT, 12, dt);
   if (Math.abs(cam.fov - P.fov) > 0.05) { cam.fov = P.fov; cam.updateProjectionMatrix(); G.vmCamera.fov = lerp(58, 40, P.ads); G.vmCamera.updateProjectionMatrix(); }
   updateSunFollow(P.pos);
@@ -344,7 +315,7 @@ function updateRifle(dt) {
     } else if (P.ammo > 0) {
       P.ammo--; P.fireCd = 0.42; P.lever = 1; P.recoil = 1; P.aimKick = lerp(0.04, 0.02, P.ads);
       shoot(false);
-      gunshot(null, 1);
+      gunshot(null, 1); G.controls.haptic('fire');
       vmFlash.visible = true; vmFlash.material.rotation = Math.random() * 6; vmFlash.userData.t = 0.05; vmLight.intensity = 6;
       setTimeout(() => sfx('weapon_change', { vol: 0.32, rate: 1.6 }), 180);
       if (P.ammo === 0) setTimeout(startReload, 380);
@@ -389,7 +360,7 @@ function updateMounted(dt) {
     P.fireCd = 0.08; P.heat += perShot; P.aimKick = 0.012;
     g.barrels.rotation.z += 0.9;
     shoot(true);
-    gunshot(null, 0.75);
+    gunshot(null, 0.75); if (Math.random() < 0.5) G.controls.haptic('fire');
     if (P.heat >= 1) { P.heat = 1; P.overheat = true; sfx('skid', { vol: 0.5, rate: 1.4 }); UI.toast('과열! 식는 중…'); }
   }
   if (P.overheat && Math.random() < dt * 20) smoke(g.barrels.localToWorld(new THREE.Vector3(0, 0, -0.9)), 0.3);

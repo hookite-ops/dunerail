@@ -26,6 +26,7 @@ class Enemy {
     this.hp -= amount; this.flash = 0.08;
     UI.floater(point, Math.round(amount), crit ? 'crit' : '');
     blood(point);
+    G.controls?.haptic(this.hp - amount <= 0 ? 'kill' : 'hit');
     if (crit) sfx('coin', { vol: 0.45, rate: 1.7, jitter: 0 });
     else sfx('toggle', { vol: 0.32, rate: 2.2 });
     if (this.hp <= 0) {
@@ -536,6 +537,22 @@ export function nearestBoarder(o, maxD) {
   let best = null, bd = maxD;
   for (const e of enemies) if (e instanceof Boarder && e.alive && e.leapT >= 1) { const d = Math.hypot(e.pos.x - o.x, e.pos.z - o.z); if (d < bd) { bd = d; best = e; } }
   return best;
+}
+// 조준 보조 대상: 살아 있고 시야가 트인 적의 몸통 (객체 재사용)
+const AT = [];
+export function assistTargets(cam) {
+  let n = 0;
+  for (const en of enemies) {
+    if (!en.alive || !en.hitboxes[0] || en.leapT < 1) continue;
+    const h = en.hitboxes[0], d = h.c.distanceTo(cam);
+    if (d > 70) continue;
+    V2.subVectors(h.c, cam).divideScalar(d);
+    if (rayBoxes(cam, V2, d) < d - h.r) continue;
+    const t = AT[n] || (AT[n] = { x: 0, y: 0, z: 0, r: 0, ref: null });
+    t.x = h.c.x; t.y = h.c.y; t.z = h.c.z; t.r = h.r; t.ref = en; n++;
+  }
+  AT.length = n;
+  return AT;
 }
 // 화면 밖 위협 표시용
 export function threats(out) {

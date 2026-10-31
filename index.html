@@ -44,15 +44,7 @@
   <div id="indicators"></div>
   <div id="streak"></div>
 
-  <!-- touch controls -->
-  <div id="stickZone"></div>
-  <div id="stick" class="hidden"><div id="stickKnob"></div></div>
-  <button id="btnFire" class="tbtn fire" aria-label="발사"><span>발사</span><em id="ammoTxt">8</em></button>
-  <button id="btnJump" class="tbtn sm jump" aria-label="점프">점프</button>
-  <button id="btnCrouch" class="tbtn sm crouch" aria-label="앉기">앉기</button>
-  <button id="btnReload" class="tbtn sm reload" aria-label="장전">장전</button>
-  <button id="btnAim" class="tbtn sm aim" aria-label="정조준">조준</button>
-  <button id="btnDyn" class="tbtn sm dyn" aria-label="다이너마이트"><span>🧨</span><em id="dynN">3</em><i id="dynCd"></i></button>
+  <!-- 터치 조작은 js/controls/mfc.js가 이 안에 그린다 -->
   <button id="btnUse" class="use hidden">탑승</button>
 </div>
 
@@ -73,7 +65,8 @@
     <li><b>왼쪽</b> 끌어서 이동</li>
     <li><b>오른쪽</b> 끌어서 조준</li>
     <li><b>발사</b> 누른 채 끌면 조준하며 사격</li>
-    <li><b>스틱 끝까지</b> 밀면 달리기</li>
+    <li><b>스틱을 위로 끝까지</b> 끌어 떼면 자동 달리기 🔒</li>
+    <li><b>달리다 앉기</b> = 슬라이딩</li>
     <li><b>산적 코앞</b>에서 발사 = 개머리판으로 밀쳐내기</li>
     <li><b>🧨</b> 다이너마이트 · <b>사다리</b> 앞에서 밀면 지붕으로</li>
   </ul>
@@ -83,8 +76,8 @@
 <section id="pause" class="screen modal hidden">
   <div class="card">
     <h3>일시정지</h3>
-    <label class="slider">조준 감도<input id="sens" type="range" min="0.4" max="2.2" step="0.05" value="1" /></label>
-    <label class="toggle"><input id="sfxToggle" type="checkbox" checked /> 효과음</label>
+    <div id="ctrlSettings"></div>
+    <label class="toggle sfx-row"><input id="sfxToggle" type="checkbox" checked /> 효과음</label>
     <div class="row"><button id="btnResume" class="btn primary">계속</button><button id="btnQuit" class="btn">처음으로</button></div>
   </div>
 </section>
