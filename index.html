@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+<meta name="theme-color" content="#1e130d" />
+<meta name="color-scheme" content="dark" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>DUNE RAIL · 철로의 무법자</title>
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="icon.svg" type="image/svg+xml" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@500;700;900&display=swap" />
+<link rel="stylesheet" href="style.css" />
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/addons/" } }</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div class="hud-tl">
+    <div class="bar-row"><span class="bar-ico">❤</span><div class="bar"><i id="hpFill"></i></div><b id="hpTxt">100</b></div>
+    <div class="bar-row loot"><span class="bar-ico">⛁</span><div class="bar"><i id="lootFill"></i></div><b id="lootTxt">금고 안전</b></div>
+  </div>
+  <div class="hud-tc">
+    <div class="route"><div class="route-line"><i id="routeFill"></i><span id="routeTrain">🚂</span></div><span class="route-end">역</span></div>
+    <div id="waveTxt" class="wave">1구간 · 출발</div>
+  </div>
+  <div class="hud-tr">
+    <div class="scrap"><span>⚙</span><b id="scrapTxt">0</b></div>
+    <button id="btnPause" class="icon-btn" aria-label="일시정지"><span class="pause-ico"></span></button>
+  </div>
+
+  <div id="cross"><i></i><i></i><i></i><i></i></div>
+  <div id="hitmark"></div>
+  <div id="dmgDir"></div>
+  <div id="vignette"></div>
+  <div id="heatWrap" class="hidden"><div class="heat"><i id="heatFill"></i></div><span>과열</span></div>
+  <div id="toast"></div>
+  <div id="floaters"></div>
+
+  <!-- touch controls -->
+  <div id="stickZone"></div>
+  <div id="stick" class="hidden"><div id="stickKnob"></div></div>
+  <button id="btnFire" class="tbtn fire" aria-label="발사"><span>발사</span><em id="ammoTxt">8</em></button>
+  <button id="btnJump" class="tbtn sm jump" aria-label="점프">점프</button>
+  <button id="btnCrouch" class="tbtn sm crouch" aria-label="앉기">앉기</button>
+  <button id="btnReload" class="tbtn sm reload" aria-label="장전">장전</button>
+  <button id="btnUse" class="use hidden">탑승</button>
+</div>
+
+<!-- Title -->
+<section id="title" class="screen">
+  <div class="sun"></div>
+  <div class="dunes"></div>
+  <div class="title-box">
+    <p class="eyebrow">사막 열차 방어 FPS</p>
+    <h1>DUNE RAIL</h1>
+    <h2>철로의 무법자</h2>
+    <p class="lede">끝없이 달리는 오아시스 익스프레스. 산적과 기계 병기로부터 금고 화물을 지켜 다음 역까지 달려라.</p>
+    <button id="btnStart" class="btn primary">출발</button>
+    <p id="loadTxt" class="load">짐 싣는 중…</p>
+    <p class="best" id="bestTxt"></p>
+  </div>
+  <ul class="howto">
+    <li><b>왼쪽</b> 끌어서 이동</li>
+    <li><b>오른쪽</b> 끌어서 조준</li>
+    <li><b>발사</b> 누른 채 끌면 조준하며 사격</li>
+    <li><b>사다리</b> 앞에서 밀면 지붕으로</li>
+  </ul>
+</section>
+
+<!-- Pause -->
+<section id="pause" class="screen modal hidden">
+  <div class="card">
+    <h3>일시정지</h3>
+    <label class="slider">조준 감도<input id="sens" type="range" min="0.4" max="2.2" step="0.05" value="1" /></label>
+    <label class="toggle"><input id="sfxToggle" type="checkbox" checked /> 효과음</label>
+    <div class="row"><button id="btnResume" class="btn primary">계속</button><button id="btnQuit" class="btn">처음으로</button></div>
+  </div>
+</section>
+
+<!-- Station shop -->
+<section id="shop" class="screen modal hidden">
+  <div class="card wide">
+    <p class="eyebrow" id="shopEyebrow">1구간 완주</p>
+    <h3>모래바람 역 · 정비소</h3>
+    <p class="sub">모은 고철 <b id="shopScrap">0</b> ⚙ 로 열차와 장비를 손보자</p>
+    <div id="shopList" class="shop-list"></div>
+    <button id="btnDepart" class="btn primary">다음 구간 출발</button>
+  </div>
+</section>
+
+<!-- Game over -->
+<section id="over" class="screen modal hidden">
+  <div class="card">
+    <p class="eyebrow" id="overEyebrow">런 종료</p>
+    <h3 id="overTitle">금고를 빼앗겼다</h3>
+    <div class="stats" id="overStats"></div>
+    <div class="row"><button id="btnRetry" class="btn primary">다시 출발</button><button id="btnHome" class="btn">처음으로</button></div>
+  </div>
+</section>
+
+<div id="rotate" class="screen"><div class="phone"></div><p>폰을 가로로 돌려 주세요</p></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,2 @@
+{ "name": "DUNE RAIL · 철로의 무법자", "short_name": "DUNE RAIL", "start_url": "./", "display": "fullscreen", "orientation": "landscape",
+  "background_color": "#1e130d", "theme_color": "#1e130d", "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }] }
