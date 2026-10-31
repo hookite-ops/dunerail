@@ -67,4 +67,41 @@ export function floater(pos, text, cls = '') {
     { transform: `translate(${x + dx}px, ${y - 46}px) translate(-50%, 0) scale(1)`, opacity: 0 },
   ], { duration: 800, easing: EASE }).onfinish = () => d.remove();
 }
+export function streak(n, bonus) {
+  const t = el.streak; t.textContent = n >= 5 ? `무법자 사냥 ×${n}  +${bonus}⚙` : `${n}연속 처치  +${bonus}⚙`;
+  t.animate([{ opacity: 0, transform: 'translate(-50%, 6px) scale(0.96)' }, { opacity: 1, transform: 'translate(-50%, 0) scale(1.04)', offset: 0.15 },
+    { opacity: 1, transform: 'translate(-50%, 0) scale(1)', offset: 0.75 }, { opacity: 0, transform: 'translate(-50%, -4px) scale(1)' }], { duration: 1400, easing: EASE });
+}
+// 화면 밖 위협 화살표 (요소를 재사용, transform만 바꿈)
+const arrows = [];
+const ICON = { boarder: '🤠', loot: '💰', walker: '⚙', shell: '💥' };
+export function indicators(list) {
+  const cam = G.camera, w = innerWidth, h = innerHeight, cx = w / 2, cy = h / 2;
+  let k = 0;
+  for (const t of list) {
+    V.copy(t.p).project(cam);
+    const behind = V.z > 1;
+    let x = V.x, y = V.y;
+    if (behind) { x = -x; y = -y; }
+    if (!behind && Math.abs(x) < 0.92 && Math.abs(y) < 0.88) continue;   // 화면 안이면 표시 안 함
+    if (t.kind === 'shell' && t.p.distanceTo(cam.position) > 30) continue;
+    const a = Math.atan2(-y, x);
+    const r = Math.min((w * 0.5 - 46) / Math.abs(Math.cos(a) || 1e-3), (h * 0.5 - 46) / Math.abs(Math.sin(a) || 1e-3));
+    const px = cx + Math.cos(a) * r, py = cy + Math.sin(a) * r;
+    let d = arrows[k];
+    if (!d) { d = document.createElement('div'); d.className = 'ind'; d.innerHTML = '<i></i><b></b>'; el.indicators.appendChild(d); arrows[k] = d; }
+    d.className = 'ind ' + t.kind;
+    d.style.transform = `translate(${px}px, ${py}px)`;
+    d.firstChild.style.transform = `rotate(${a}rad)`;
+    if (d.lastChild.textContent !== ICON[t.kind]) d.lastChild.textContent = ICON[t.kind];
+    d.style.display = '';
+    if (++k >= 8) break;
+  }
+  for (; k < arrows.length; k++) arrows[k].style.display = 'none';
+}
+export function setCharges(n, cd) {
+  el.dynN.textContent = n;
+  el.btnDyn.classList.toggle('empty', n <= 0);
+  el.dynCd.style.transform = `scaleY(${cd})`;
+}
 export function show(id, on) { el[id].classList.toggle('hidden', !on); }

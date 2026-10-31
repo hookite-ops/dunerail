@@ -45,6 +45,41 @@ export function sfxAt(name, pos, opts = {}) {
   sfx(name, { ...opts, vol, pan });
 }
 
+// 총소리: CC0 충격음 위에 짧은 화약 폭음(잡음 버스트)을 겹친다 — 공개 CC0 총성 원본을 구할 수 없어 보강한 부분
+let noiseBuf = null;
+export function gunshot(pos, size = 1) {
+  if (!ctx || !G.sfx) return;
+  let vol = 1, pan = 0;
+  if (pos && G.camera) {
+    const c = G.camera.position, d = Math.hypot(pos.x - c.x, pos.y - c.y, pos.z - c.z);
+    vol = Math.min(1, 7 / (d + 4));
+    const yaw = G.camera.rotation.y, rx = Math.cos(yaw), rz = -Math.sin(yaw);
+    pan = Math.max(-0.8, Math.min(0.8, ((pos.x - c.x) * rx + (pos.z - c.z) * rz) / (d + 0.01)));
+  }
+  if (vol < 0.03) return;
+  if (!noiseBuf) {
+    noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 0.6, ctx.sampleRate);
+    const ch = noiseBuf.getChannelData(0); for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
+  }
+  const t = ctx.currentTime;
+  const out = ctx.createGain(); out.gain.value = vol * 0.9;
+  let node = out;
+  if (ctx.createStereoPanner) { const p = ctx.createStereoPanner(); p.pan.value = pan; out.connect(p); node = p; }
+  node.connect(master);
+  // 날카로운 파열음
+  const n = ctx.createBufferSource(); n.buffer = noiseBuf; n.playbackRate.value = 0.9 + Math.random() * 0.2;
+  const bp = ctx.createBiquadFilter(); bp.type = 'lowpass'; bp.frequency.setValueAtTime(9000 / size, t); bp.frequency.exponentialRampToValueAtTime(600 / size, t + 0.18 * size);
+  const ng = ctx.createGain(); ng.gain.setValueAtTime(1.0, t); ng.gain.exponentialRampToValueAtTime(0.001, t + 0.28 * size);
+  n.connect(bp); bp.connect(ng); ng.connect(out); n.start(t); n.stop(t + 0.6);
+  // 낮은 울림
+  const o = ctx.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(130 / size, t); o.frequency.exponentialRampToValueAtTime(42 / size, t + 0.22 * size);
+  const og = ctx.createGain(); og.gain.setValueAtTime(0.9, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.3 * size);
+  o.connect(og); og.connect(out); o.start(t); o.stop(t + 0.4 * size);
+  // CC0 충격음 꼬리
+  if (buf.impact) { const s = ctx.createBufferSource(); s.buffer = buf.impact; s.playbackRate.value = 0.55 / Math.sqrt(size); const g = ctx.createGain(); g.gain.value = 0.35; s.connect(g); g.connect(out); s.start(t); }
+}
+
 export function loop(name, { vol = 0.3, rate = 1 } = {}) {
   if (!ctx || !buf[name]) return null;
   if (loops[name]) return loops[name];

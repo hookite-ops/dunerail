@@ -4,7 +4,7 @@ import { G, TRAIN, clamp, rand, pick, damp } from './state.js';
 import { moveBody, rayBoxes, lineOfSight, groundAt, blocked, VAULT } from './world.js';
 import { P, hurtPlayer } from './player.js';
 import * as UI from './ui.js';
-import { sfxAt, sfx } from './audio.js';
+import { sfxAt, sfx, gunshot } from './audio.js';
 import { dust, smoke, explosion, sparks, blood, tracer, puff, muzzleWorld } from './fx.js';
 
 export const enemies = [];
@@ -21,13 +21,19 @@ const stageHp = () => 1 + (G.stage - 1) * 0.3;
 
 class Enemy {
   constructor(hp) { this.hp = this.maxHp = hp * stageHp(); this.alive = true; this.flash = 0; this.hitboxes = []; this.remove = false; this.mats = []; }
-  damage(amount, point, crit) {
+  damage(amount, point, crit, dir) {
     if (!this.alive) return;
     this.hp -= amount; this.flash = 0.08;
     UI.floater(point, Math.round(amount), crit ? 'crit' : '');
     blood(point);
-    if (this.hp <= 0) { this.alive = false; UI.hitmarker(true); G.kills++; this.die(); }
-    else { UI.hitmarker(false); sfxAt('enemy_hurt', point, { vol: 0.5 }); this.onHurt?.(); }
+    if (crit) sfx('coin', { vol: 0.45, rate: 1.7, jitter: 0 });
+    else sfx('toggle', { vol: 0.32, rate: 2.2 });
+    if (this.hp <= 0) {
+      this.alive = false; UI.hitmarker(true); G.kills++;
+      if (crit) UI.floater(point.clone().add(V3.set(0, 0.35, 0)), '헤드샷!', 'crit');
+      this.lastDir = dir ? dir.clone() : null;
+      this.die(); onKill(point);
+    } else { UI.hitmarker(false); this.onHurt?.(dir); }
   }
   tickFlash(dt) {
     if (this.flash > 0 || this._f) {
@@ -37,22 +43,57 @@ class Enemy {
   }
   reward(n, at) { G.scrap += n; G.totalScrap += n; UI.floater(at, `+${n} ⚙`, 'scrap'); sfxAt('coin', at, { vol: 0.5 }); }
 }
+// 연속 처치: 4.5초 안에 이어서 잡으면 보너스
+function onKill(at) {
+  G.streak = G.time - (G.streakT || -9) < 4.5 ? (G.streak || 1) + 1 : 1;
+  G.streakT = G.time;
+  if (G.streak >= 2) {
+    const bonus = (G.streak - 1) * 3; G.scrap += bonus; G.totalScrap += bonus;
+    UI.streak(G.streak, bonus);
+    sfx('coin', { vol: 0.5, rate: 1 + G.streak * 0.12, jitter: 0 });
+  }
+  sfx('enemy_destroy', { vol: 0.25, rate: 1.6 });
+}
 
 // 적의 총격 — 엄폐·앉기·거리로 명중 판정
 function enemyShot(from, acc, dmg) {
   const head = V1.set(P.pos.x, P.pos.y + P.eye - 0.15, P.pos.z);
   if (!lineOfSight(from, head)) return false;
   const d = from.distanceTo(head);
-  let chance = acc - d * 0.008 - (P.crouch ? 0.14 : 0) - (Math.hypot(P.vel.x, P.vel.z) > 2 ? 0.08 : 0);
+  let chance = acc - d * 0.008 - (P.crouch ? 0.14 : 0) - (Math.hypot(P.vel.x, P.vel.z) > 2 ? 0.1 : 0);
   if (G.storm > 0.3) chance -= 0.1;
   const hit = Math.random() < clamp(chance, 0.05, 0.85);
   const end = V2.copy(head);
   if (!hit) end.add(V3.set(rand(-1.2, 1.2), rand(-0.6, 1.0), rand(-1.2, 1.2)));
   tracer(from, end, [1, 0.45, 0.3]);
   muzzleWorld(from, V3.subVectors(end, from).normalize());
-  sfxAt('blaster', from, { vol: 0.55, rate: 0.9 });
+  gunshot(from, 0.7);
   if (hit) hurtPlayer(dmg, from);
+  else if (from.distanceTo(head) < 20) sfx('impact', { vol: 0.25, rate: 2.4 });   // 귓가를 스치는 소리
   return true;
+}
+
+// ── 산적 몸 (bandit.glb) ───────────────────────────────
+function makeBandit() {
+  const { m, mats } = cloneModel('bandit');
+  const j = {}; for (const n of ['Hips', 'Spine', 'Head', 'ArmL', 'ArmR', 'LegL', 'LegR', 'KneeL', 'KneeR']) j[n] = m.getObjectByName(n);
+  j.muzzle = m.getObjectByName('muzzle_ref');
+  // 옷 색을 조금씩 다르게
+  const tint = pick([0x8c2f22, 0x2f5a8c, 0x6b6b2a, 0x7a3f6a, 0x8c6a22]);
+  for (const mt of mats) if (mt.name === 'ShirtRed') mt.color.setHex(tint);
+  return { m, mats, j };
+}
+function poseSeated(j) {
+  j.LegL.rotation.x = j.LegR.rotation.x = 1.3; j.KneeL.rotation.x = j.KneeR.rotation.x = -1.35;
+  j.Spine.rotation.x = -0.18; j.ArmL.rotation.set(1.05, 0, -0.2);
+}
+function aimArm(j, ownerYaw, target, base) {
+  // 오른팔을 목표 쪽으로 (몸 기준 좌우 + 높낮이)
+  const wp = j.ArmR.getWorldPosition(V3);
+  const dx = target.x - wp.x, dy = target.y - wp.y, dz = target.z - wp.z;
+  let yaw = Math.atan2(-dx, -dz) - ownerYaw; yaw = Math.atan2(Math.sin(yaw), Math.cos(yaw));
+  const pitch = Math.atan2(dy, Math.hypot(dx, dz));
+  j.ArmR.rotation.set(Math.PI / 2 + pitch, clamp(yaw, -1.4, 1.4), 0, 'YXZ');
 }
 
 // ── 산적 바이크 ────────────────────────────────────────
@@ -60,65 +101,78 @@ const SLOTS = [-23.6, -7.2, 9.2];
 class Bike extends Enemy {
   constructor(side) {
     super(45);
-    const { m, mats } = cloneModel('bike'); this.m = m; this.mats = mats;
-    this.side = side; this.x = side * rand(6, 10); this.z = rand(55, 75); this.ry = 0;
-    this.slot = pick(SLOTS); this.state = 'approach'; this.t = 0; this.shotT = rand(1.5, 3);
-    this.rider = m.getObjectByName('Rider'); this.arm = m.getObjectByName('ArmR');
+    const { m, mats } = cloneModel('bike2'); this.m = m;
+    const b = makeBandit(); this.b = b; this.mats = [...mats, ...b.mats];
+    b.m.position.set(0, 0.07, 0.42); poseSeated(b.j); m.add(b.m);
+    this.side = side; this.x = side * rand(6, 10); this.z = rand(40, 58); this.ry = 0;
+    this.slot = pick(SLOTS); this.state = 'approach'; this.t = 0; this.shotT = rand(1.2, 2.4);
     this.wheels = ['wf', 'wb'].map((n) => m.getObjectByName(n));
-    this.vz = -6; this.wob = rand(0, 6);
+    this.vz = -8; this.wob = rand(0, 6); this.vy = 0; this.y = 0.02; this.spin = 0;
     G.scene.add(m);
-    this.hitboxes = [{ c: new THREE.Vector3(), r: 0.75, mult: 1, off: [0, 0.75, 0] }, { c: new THREE.Vector3(), r: 0.22, mult: 2, off: [0, 1.75, 0.35] }];
-    this.engine = 0;
+    this.hitboxes = [{ c: new THREE.Vector3(), r: 0.62, mult: 1, j: 'Spine' }, { c: new THREE.Vector3(), r: 0.17, mult: 2.2, j: 'Head' }, { c: new THREE.Vector3(), r: 0.6, mult: 0.8, off: [0, 0.6, 0] }];
   }
   update(dt) {
     this.t += dt; this.tickFlash(dt);
     const m = this.m;
     if (this.state === 'approach' || this.state === 'board') {
-      const tx = this.state === 'board' ? this.side * 2.25 : this.side * 4.5;
-      const tz = this.slot;
-      const dz = tz - this.z;
-      this.vz = damp(this.vz, clamp(dz * 0.8, -9, 9), 1.5, dt);
+      const tx = this.state === 'board' ? this.side * 2.3 : this.side * 4.6;
+      const dz = this.slot - this.z;
+      this.vz = damp(this.vz, clamp(dz * 0.9, -11, 11), 1.6, dt);
       this.z += this.vz * dt;
-      this.x = damp(this.x, tx + Math.sin(this.t * 1.3 + this.wob) * 0.3, 1.2, dt);
+      this.x = damp(this.x, tx + Math.sin(this.t * 1.3 + this.wob) * 0.35, 1.3, dt);
       if (Math.abs(dz) < 3 && this.state === 'approach') this.state = 'board';
-      if (this.state === 'board' && Math.abs(dz) < 0.8 && Math.abs(this.x - this.side * 2.25) < 0.3) {
+      if (this.state === 'board' && Math.abs(dz) < 0.9 && Math.abs(this.x - this.side * 2.3) < 0.35) {
         this.boardT = (this.boardT || 0) + dt;
-        if (this.boardT > 1.1 && (boardersOnTrain() >= 2 + Math.min(2, G.stage - 1) || this.harass)) {
-          // 열차가 꽉 찼으면 옆에 붙어 견제 사격만
+        if (this.boardT > 0.9 && (boardersOnTrain() >= 2 + Math.min(2, G.stage - 1) || this.harass)) {
           this.harass = true; this.state = 'approach'; this.slot = pick(SLOTS) + rand(-4, 4); this.boardT = 0;
-        } else if (this.boardT > 1.1) {
-          spawnBoarder(this.side, this.slot);
-          this.rider.visible = false; this.state = 'empty'; this.alive = false; this.hitboxes = [];
-          sfxAt('land', V1.set(this.x, 1.5, this.z), { vol: 0.8 });
-        }
+        } else if (this.boardT > 0.9) this.leap();
       }
-      // 사격
       this.shotT -= dt;
-      if (this.shotT <= 0 && this.rider.visible) {
-        this.shotT = rand(1.8, 3.2) / Math.min(1.6, stageHp());
-        const from = this.arm.localToWorld(V3.set(0, 0.04, -0.7)).clone();
+      const aimAt = V2.set(P.pos.x, P.pos.y + 1.3, P.pos.z);
+      aimArm(this.b.j, this.ry, aimAt);
+      if (this.shotT <= 0) {
+        this.shotT = rand(1.6, 2.8) / Math.min(1.6, stageHp());
+        const from = this.b.j.muzzle.getWorldPosition(new THREE.Vector3());
         if (from.distanceTo(P.pos) < 38) enemyShot(from, 0.42, 7);
       }
-      // 팔을 플레이어 쪽으로
-      const ax = P.pos.x - this.x, az = P.pos.z - this.z;
-      this.arm.rotation.x = 0.1;
-      this.arm.rotation.y = Math.atan2(-ax, -az) - this.ry;
-      m.rotation.set(0, this.ry, Math.sin(this.t * 3 + this.wob) * 0.04 + (this.x - this.side * 4.5) * -0.02);
+      m.rotation.set(0, this.ry, Math.sin(this.t * 3 + this.wob) * 0.04 + (this.x - tx) * -0.05);
+      m.position.set(this.x, 0.02, this.z);
+    } else if (this.state === 'empty') {
+      // 빈 바이크 — 비틀거리다 넘어져 뒤로 흘러감
+      this.z += G.speed * 0.35 * dt; this.x += this.side * 1.8 * dt;
+      this.tilt = Math.min(1.45, (this.tilt || 0) + dt * 1.2);
+      m.rotation.set(0, this.ry + this.tilt * 0.4, this.side * this.tilt);
+      m.position.set(this.x, 0.02, this.z);
+      if (this.z > 140) this.remove = true;
     } else {
-      // 빈 바이크/추락 — 뒤로 흘러가며 넘어짐
-      this.z += G.speed * 0.6 * dt; this.x += this.side * 2.5 * dt;
-      this.tilt = Math.min(1.5, (this.tilt || 0) + dt * 1.6);
-      m.rotation.set(this.dead ? this.tilt * 0.6 : 0, this.ry + this.tilt * 0.5, this.side * this.tilt);
+      // 격파 — 공중제비
+      this.vy -= 18 * dt; this.y += this.vy * dt;
+      if (this.y < 0) { this.y = 0; this.vy = Math.abs(this.vy) * 0.3; if (this.vy < 1) this.vy = 0; }
+      this.spin += dt * (this.vy > 0 ? 7 : 2);
+      this.z += G.speed * 0.8 * dt; this.x += this.side * 3 * dt;
+      m.rotation.set(-this.spin, this.ry + this.spin * 0.3, this.side * Math.min(1.4, this.spin * 0.5));
+      m.position.set(this.x, this.y, this.z);
+      if (Math.random() < dt * 25) smoke(V1.set(this.x, this.y + 0.5, this.z), 0.7);
       if (this.z > 140) this.remove = true;
     }
-    m.position.set(this.x, 0.12, this.z);
-    for (const w of this.wheels) if (w) w.rotation.x -= dt * 22;
-    if (Math.random() < dt * 22) dust(V1.set(this.x, 0.2, this.z + 0.9), 0.85);
-    for (const h of this.hitboxes) h.c.set(this.x + h.off[0], h.off[1], this.z + h.off[2]);
+    for (const w of this.wheels) if (w) w.rotation.x -= dt * 24;
+    if (this.y < 0.2 && Math.random() < dt * 26) dust(V1.set(this.x, 0.2, this.z + 0.9), 0.85);
+    m.updateMatrixWorld();
+    for (const h of this.hitboxes) { if (h.j) this.b.j[h.j].getWorldPosition(h.c); else h.c.set(this.x + h.off[0], h.off[1], this.z + h.off[2]); }
+    if (this.hitboxes[0]?.j === 'Spine') this.hitboxes[0].c.y += 0.25;
+  }
+  leap() {
+    // 산적이 바이크에서 열차로 뛰어오른다 → 탑승 산적이 됨
+    const wp = this.b.m.getWorldPosition(new THREE.Vector3());
+    this.m.remove(this.b.m);
+    const bd = new Boarder(this.side, this.slot, this.b, wp);
+    enemies.push(bd);
+    this.state = 'empty'; this.alive = false; this.hitboxes = [];
+    sfxAt('jump_a', wp, { vol: 0.8, rate: 0.8 });
   }
   die() {
-    this.dead = true; this.state = 'crash'; this.hitboxes = [];
-    explosion(V1.set(this.x, 0.8, this.z), 0.7); sfxAt('enemy_destroy', V1, { vol: 1 });
+    this.state = 'crash'; this.hitboxes = []; this.vy = 7.5;
+    explosion(V1.set(this.x, 0.8, this.z), 0.8); sfxAt('enemy_destroy', V1, { vol: 1 });
     this.reward(12, V1.set(this.x, 1.8, this.z));
   }
 }
@@ -169,35 +223,43 @@ function navDir(x, z, out) {
 // ── 탑승 산적 ──────────────────────────────────────────
 function carIndex(z) { for (let i = 0; i < 6; i++) { const [a, b] = TRAIN.carZ(i); if (z >= a - 0.7 && z < b + 0.7) return i; } return z < -40 ? 0 : 5; }
 class Boarder extends Enemy {
-  constructor(side, z) {
+  constructor(side, z, bandit, fromPos) {
     super(38);
-    const { m, mats } = cloneModel('bike'); this.mats = mats;
-    const rider = m.getObjectByName('Rider');
-    rider.position.set(0, 0, 0); rider.rotation.set(0, 0, 0);
-    const holder = new THREE.Group(); holder.add(rider); holder.scale.setScalar(1.35);
-    this.m = holder; this.rider = rider;
-    this.legs = [rider.getObjectByName('leg-1'), rider.getObjectByName('leg1')].filter(Boolean);
-    for (const l of this.legs) l.rotation.x = 0;
-    this.arm = rider.getObjectByName('ArmR'); this.armL = rider.getObjectByName('ArmL');
-    this.pos = new THREE.Vector3(side * 1.25, TRAIN.FLOOR, z); this.vel = new THREE.Vector3();
-    this.ry = side > 0 ? Math.PI / 2 : -Math.PI / 2; this.shotT = rand(0.8, 1.6); this.stuck = 0; this.walk = 0; this.looting = false;
-    this.hitboxes = [{ c: new THREE.Vector3(), r: 0.36, mult: 1, y: 0.6 }, { c: new THREE.Vector3(), r: 0.2, mult: 2, y: 1.2 }];
-    G.scene.add(holder);
-    UI.toast(z < -15 ? '산적이 무기칸에 올라탔다!' : z < 0 ? '산적이 화물칸에 침입!' : '산적이 정비칸에 올라탔다!');
+    const b = bandit || makeBandit(); this.b = b; this.mats = b.mats; this.j = b.j;
+    this.m = b.m; G.scene.add(this.m);
+    for (const k of ['LegL', 'LegR', 'KneeL', 'KneeR', 'Spine', 'ArmL']) b.j[k].rotation.set(0, 0, 0);
+    this.target = new THREE.Vector3(side * 1.05, TRAIN.FLOOR, z);
+    this.pos = new THREE.Vector3(side * 1.05, TRAIN.FLOOR, z); this.vel = new THREE.Vector3();
+    this.ry = side > 0 ? Math.PI / 2 : -Math.PI / 2; this.shotT = rand(1.0, 1.8); this.stuck = 0; this.walk = 0; this.looting = false;
+    this.stun = 0;
+    // 뛰어오르는 연출
+    this.leapT = fromPos ? 0 : 1; this.from = fromPos ? fromPos.clone() : null;
+    this.hitboxes = [{ c: new THREE.Vector3(), r: 0.34, mult: 1, j: 'Spine', dy: 0.25 }, { c: new THREE.Vector3(), r: 0.17, mult: 2.2, j: 'Head', dy: 0.08 }, { c: new THREE.Vector3(), r: 0.26, mult: 0.8, j: 'Hips', dy: -0.2 }];
+    UI.toast(z < -15 ? '산적이 무기칸에 뛰어올랐다!' : z < 0 ? '산적이 화물칸에 침입!' : '산적이 정비칸에 뛰어올랐다!');
   }
+  knock(vx, vz, up) { this.vel.set(vx, up, vz); this.stun = 0.9; this.flinch = 1.5; this.knocked = true; }
   update(dt) {
     this.tickFlash(dt);
-    const p = this.pos;
+    const p = this.pos, j = this.j;
+    if (this.leapT < 1) {
+      this.leapT = Math.min(1, this.leapT + dt / 0.55);
+      const t = this.leapT;
+      p.lerpVectors(this.from, this.target, t); p.y += Math.sin(t * Math.PI) * 1.6;
+      j.LegL.rotation.x = j.LegR.rotation.x = 1.0 * Math.sin(t * Math.PI); j.KneeL.rotation.x = j.KneeR.rotation.x = -1.2 * Math.sin(t * Math.PI);
+      this.m.position.copy(p); this.m.rotation.set(0, this.ry, 0);
+      if (t >= 1) { p.copy(this.target); this.vel.set(-Math.sign(p.x) * 1.5, 0, 0); sfxAt('land', p, { vol: 0.9 }); }
+      this.syncHit(); return;
+    }
     const toP = V1.set(P.pos.x - p.x, 0, P.pos.z - p.z); const dP = toP.length();
-    const eye = V2.set(p.x, p.y + 1.45, p.z);
-    const sees = dP < 17 && lineOfSight(eye, V3.set(P.pos.x, P.pos.y + P.eye - 0.1, P.pos.z));
-    let tx, tz, wantMove = true;
+    const eye = V2.set(p.x, p.y + 1.6, p.z);
+    const sees = dP < 18 && lineOfSight(eye, V3.set(P.pos.x, P.pos.y + P.eye - 0.1, P.pos.z));
+    let tx, tz, wantMove = this.stun <= 0;
     const goVault = G.loot < 1;
-    if (sees && !this.looting) { wantMove = dP > 7; tx = P.pos.x; tz = P.pos.z; }
+    if (sees && !this.looting) { wantMove = wantMove && dP > 6; tx = P.pos.x; tz = P.pos.z; }
     else if (goVault) { tx = 0.02; tz = VAULT.z; }
     else { tx = P.pos.x; tz = P.pos.z; }
-    // 금고 도착 → 약탈
     this.flinch = Math.max(0, (this.flinch || 0) - dt);
+    this.stun = Math.max(0, this.stun - dt);
     const atVault = Math.hypot(p.x - 0.02, p.z - VAULT.z) < 0.7 && goVault && this.flinch <= 0;
     this.looting = atVault;
     if (atVault) { wantMove = false; lootingNow++; }
@@ -205,54 +267,75 @@ class Boarder extends Enemy {
     if (wantMove) {
       if (sees || !goVault) dir.set(tx - p.x, 0, tz - p.z);
       else navDir(p.x, p.z, dir);
-      const dl = dir.length(); if (dl > 0.01) dir.multiplyScalar(2.6 / dl);
+      const dl = dir.length(); if (dl > 0.01) dir.multiplyScalar(2.7 / dl);
     }
-    // 서로 겹치지 않게
     for (const o of enemies) if (o !== this && o instanceof Boarder && o.alive) {
       const ox = p.x - o.pos.x, oz = p.z - o.pos.z, d = Math.hypot(ox, oz);
       if (d < 0.6 && d > 0.001) { dir.x += ox / d * 1.5; dir.z += oz / d * 1.5; }
     }
-    this.vel.x = damp(this.vel.x, dir.x, 8, dt); this.vel.z = damp(this.vel.z, dir.z, 8, dt);
+    if (this.stun <= 0) { this.vel.x = damp(this.vel.x, dir.x, 8, dt); this.vel.z = damp(this.vel.z, dir.z, 8, dt); }
+    else { this.vel.x *= Math.exp(-1.2 * dt); this.vel.z *= Math.exp(-1.2 * dt); }
     this.vel.y -= 22 * dt;
     const bx = p.x, bz = p.z;
-    moveBody(p, this.vel, dt, 0.3, 1.5, 0.45);
+    // 밀려날 때는 난간을 넘을 수 있게 (발 높이 기준 계단을 높여 판정)
+    moveBody(p, this.vel, dt, 0.3, 1.6, this.stun > 0 ? 0.45 + Math.max(0, p.y - TRAIN.FLOOR) : 0.45);
+    if (Math.abs(p.x) > 1.55 && this.stun > 0) p.z += G.speed * 0.2 * dt;
     const moved = Math.hypot(p.x - bx, p.z - bz) / dt;
     if (wantMove && moved < 0.4) this.stuck += dt; else this.stuck = Math.max(0, this.stuck - dt * 2);
-    if (this.stuck > 1.6) this.stuck = 0;
-    if (p.y < 0.5) { this.alive = false; this.remove = true; G.scene.remove(this.m); return; }  // 떨어짐
-    // 방향·걷기
+    // 열차 밖으로 떨어짐 → 처치
+    if (p.y < 0.9 && Math.abs(p.x) > 1.4) { this.fallOff(); return; }
+    // 몸짓
     const face = sees ? Math.atan2(-(P.pos.x - p.x), -(P.pos.z - p.z)) : (moved > 0.3 ? Math.atan2(-this.vel.x, -this.vel.z) : this.ry);
     let d = face - this.ry; d = Math.atan2(Math.sin(d), Math.cos(d)); this.ry += d * Math.min(1, dt * 8);
-    this.walk += moved * dt * 3.5;
-    const sw = moved > 0.3 ? Math.sin(this.walk) * 0.6 : 0;
-    if (this.legs[0]) this.legs[0].rotation.x = sw; if (this.legs[1]) this.legs[1].rotation.x = -sw;
-    if (this.armL) this.armL.rotation.x = this.looting ? -1.0 + Math.sin(G.time * 12) * 0.4 : -sw * 0.5;
-    if (this.arm) this.arm.rotation.x = sees ? 0.05 : this.looting ? -0.5 + Math.sin(G.time * 12 + 1) * 0.3 : -0.9;
-    this.m.position.set(p.x, p.y + 0.16, p.z); this.m.rotation.y = this.ry;
-    // 사격
-    if (sees) {
+    this.walk += moved * dt * 3.2;
+    const sw = moved > 0.3 ? Math.sin(this.walk) : 0;
+    j.LegL.rotation.x = sw * 0.55; j.LegR.rotation.x = -sw * 0.55;
+    j.KneeL.rotation.x = -Math.max(0, -sw) * 0.8; j.KneeR.rotation.x = -Math.max(0, sw) * 0.8;
+    j.Spine.rotation.x = this.stun > 0 ? 0.35 : this.looting ? -0.4 : 0;
+    j.ArmL.rotation.set(this.looting ? 1.2 + Math.sin(G.time * 12) * 0.35 : -sw * 0.4, 0, -0.1);
+    if (sees && this.stun <= 0) aimArm(j, this.ry, V2.set(P.pos.x, P.pos.y + 1.3, P.pos.z));
+    else j.ArmR.rotation.set(this.looting ? 1.0 + Math.sin(G.time * 12 + 1) * 0.3 : sw * 0.4, 0, 0.1);
+    this.m.position.set(p.x, p.y, p.z); this.m.rotation.set(this.stun > 0 ? 0.25 : 0, this.ry, 0);
+    if (sees && this.stun <= 0) {
       this.shotT -= dt;
       if (this.shotT <= 0) {
         this.shotT = rand(1.1, 1.8) / Math.min(1.5, stageHp());
-        const from = this.arm.localToWorld(V1.set(0, 0.04, -0.7)).clone();
-        enemyShot(from, 0.5, 8);
+        enemyShot(j.muzzle.getWorldPosition(new THREE.Vector3()), 0.5, 8);
       }
-    } else this.shotT = Math.max(this.shotT, 0.5);
-    for (const h of this.hitboxes) h.c.set(p.x, p.y + h.y, p.z);
+    } else this.shotT = Math.max(this.shotT, 0.6);
+    this.syncHit();
+  }
+  syncHit() { this.m.updateMatrixWorld(); for (const h of this.hitboxes) { this.j[h.j].getWorldPosition(h.c); h.c.y += h.dy; } }
+  fallOff() {
+    if (!this.alive) return;
+    this.alive = false; G.kills++;
+    const at = this.pos.clone().add(V1.set(0, 1.4, 0));
+    UI.floater(at, '열차 밖으로!', 'crit'); this.reward(16, at); onKill(at);
+    sfxAt('skid', at, { vol: 0.7, rate: 1.3 });
+    this.hitboxes = []; this.dying = 0; this.dvel = new THREE.Vector3(Math.sign(this.pos.x) * 2, 2, 0); this.spin = 2;
   }
   die() {
-    const at = V1.set(this.pos.x, this.pos.y + 1.2, this.pos.z).clone();
+    const at = this.pos.clone().add(V1.set(0, 1.2, 0));
     this.reward(10, at); puff(at, 8, [0.7, 0.5, 0.35, 0.6]);
-    sfxAt('enemy_destroy', at, { vol: 0.6, rate: 1.3 });
-    this.dying = 0; this.hitboxes = [];
+    this.hitboxes = []; this.dying = 0;
+    const d = this.lastDir || V2.set(this.pos.x - P.pos.x, 0, this.pos.z - P.pos.z).normalize();
+    this.dvel = new THREE.Vector3(d.x * 3, 2.5, d.z * 3); this.spin = 0;
   }
-  onHurt() { this.flinch = 1.5; }
+  onHurt(dir) { this.flinch = 1.5; if (dir) { this.vel.x += dir.x * 1.5; this.vel.z += dir.z * 1.5; } }
   dieUpdate(dt) {
+    // 간단한 래그돌: 뒤로 넘어지며 날아감, 열차 밖이면 모래 위로 떨어져 뒤로 흘러감
     this.dying += dt;
-    this.m.rotation.x = Math.min(1.5, this.dying * 5) * -1;
-    this.m.position.y = this.pos.y + 0.16 - Math.min(0.3, this.dying);
-    if (this.dying > 1.0) { this.m.scale.multiplyScalar(Math.pow(0.02, dt)); }
-    if (this.dying > 1.6) this.remove = true;
+    const p = this.pos, v = this.dvel;
+    v.y -= 20 * dt; p.addScaledVector(v, dt);
+    const g = Math.abs(p.x) < 1.5 && p.z > TRAIN.front && p.z < TRAIN.back ? groundAt(p.x, p.z, p.y + 0.3, 0.2, 0.5) : 0.05;
+    if (p.y < g) { p.y = g; v.y = 0; v.x *= 0.6; v.z *= 0.6; }
+    if (g < 0.5 && p.y < 0.6) p.z += G.speed * dt;
+    this.spin += dt * 4;
+    const fall = Math.min(1.5, this.dying * 4.5);
+    this.m.position.copy(p); this.m.rotation.set(-fall, this.ry + this.spin * 0.5, 0);
+    const j = this.j; j.ArmL.rotation.x = j.ArmR.rotation.x = -2.2 * Math.min(1, this.dying * 3); j.LegL.rotation.x = 0.6; j.KneeL.rotation.x = -0.8;
+    if (this.dying > 2.4 || p.z > 150) { if (this.dying > 2.4) this.m.scale.multiplyScalar(Math.pow(0.001, dt)); }
+    if (this.dying > 3.2 || p.z > 150) this.remove = true;
   }
 }
 
@@ -288,12 +371,8 @@ class Drone extends Enemy {
   blow(onPlayer) {
     if (this.remove) return;
     this.alive = false; this.remove = true; this.hitboxes = [];
-    explosion(this.p.clone(), 0.65); sfxAt('enemy_destroy', this.p, { vol: 0.9, rate: 1.2 });
-    const d = this.p.distanceTo(V1.set(P.pos.x, P.pos.y + 1, P.pos.z));
-    if (d < 3.6) hurtPlayer((onPlayer ? 22 : 14) * (1 - d / 5), this.p);
-    // 주변 적에게도 피해
-    for (const e of enemies) if (e !== this && e.alive && e.hitboxes[0] && e.hitboxes[0].c.distanceTo(this.p) < 3.5) e.damage(25, e.hitboxes[0].c.clone(), false);
     G.scene.remove(this.m);
+    explodeAt(this.p.clone(), 3.5, 25, { playerDmg: onPlayer ? 22 : 14, scale: 0.65, from: this });
   }
   die() { this.reward(6, this.p.clone()); this.blow(false); }
 }
@@ -375,7 +454,7 @@ function fireShell(w, k) {
   mesh.position.copy(from); G.scene.add(mesh);
   shells.push({ p: from, v, g, mesh, t: 0, T, w });
   muzzleWorld(from, v.clone().normalize()); explosion(from, 0.2);
-  sfxAt('impact', from, { vol: 1, rate: 0.5 }); sfxAt('blaster', from, { vol: 0.8, rate: 0.35 });
+  gunshot(from, 1.6);
 }
 function updateShells(dt) {
   for (let i = shells.length - 1; i >= 0; i--) {
@@ -385,10 +464,8 @@ function updateShells(dt) {
     const g = groundAt(s.p.x, s.p.z, s.p.y, 0.1, 0);
     const inBox = G.boxes.some((b) => s.p.x > b.min[0] && s.p.x < b.max[0] && s.p.y > b.min[1] && s.p.y < b.max[1] && s.p.z > b.min[2] && s.p.z < b.max[2]);
     if (s.p.y <= g || inBox || s.t > s.T + 1.5) {
-      explosion(s.p, 0.9); sfxAt('enemy_destroy', s.p, { vol: 1, rate: 0.8 });
-      const d = s.p.distanceTo(V1.set(P.pos.x, P.pos.y + 0.9, P.pos.z));
-      if (d < 3.2) hurtPlayer(32 * (1 - d / 3.8) * (s.w.boss ? 1.1 : 1), s.p);
       G.scene.remove(s.mesh); shells.splice(i, 1);
+      explodeAt(s.p.clone(), 3.2, 30, { playerDmg: 32 * (s.w.boss ? 1.1 : 1), scale: 0.9 });
     }
   }
 }
@@ -423,6 +500,53 @@ export function clearEnemies() {
   for (const s of shells) G.scene.remove(s.mesh);
   shells.length = 0;
   G.bossAlive = false;
+}
+
+// 폭발: 플레이어·적 모두에게 피해, 탑승 산적은 날려 보냄
+export function explodeAt(p, radius, dmg, { playerDmg = 0, scale = 1, from = null, knock = 0 } = {}) {
+  explosion(p, scale); sfxAt('enemy_destroy', p, { vol: 1.1, rate: 0.9 - scale * 0.15 });
+  if (playerDmg) {
+    const d = p.distanceTo(V1.set(P.pos.x, P.pos.y + 0.9, P.pos.z));
+    if (d < radius) hurtPlayer(playerDmg * (1 - d / (radius * 1.2)), p);
+  }
+  for (const e of enemies) {
+    if (e === from || !e.alive || !e.hitboxes[0]) continue;
+    const c = e.hitboxes[0].c; const d = c.distanceTo(p);
+    if (d > radius) continue;
+    if (knock && e instanceof Boarder) { const dx = c.x - p.x, dz = c.z - p.z, L = Math.hypot(dx, dz) || 1; e.knock(dx / L * knock, dz / L * knock, 6.8); }
+    e.damage(dmg * (1 - d / (radius * 1.3)), c.clone(), false, V2.subVectors(c, p).normalize());
+  }
+}
+// 개머리판 치기: 앞 1.9m 안의 산적을 밀쳐낸다
+export function meleeHit(o, d) {
+  let best = null, bd = 1.9;
+  for (const e of enemies) {
+    if (!(e instanceof Boarder) || !e.alive || e.leapT < 1) continue;
+    const to = V1.set(e.pos.x - o.x, 0, e.pos.z - o.z); const L = to.length();
+    if (L < bd && to.normalize().dot(V2.set(d.x, 0, d.z).normalize()) > 0.55) { bd = L; best = e; }
+  }
+  if (!best) return false;
+  const dx = best.pos.x - o.x, dz = best.pos.z - o.z, L = Math.hypot(dx, dz) || 1;
+  best.knock(dx / L * 7.5, dz / L * 7.5, 6.8);
+  best.damage(18, best.hitboxes[0].c.clone(), false, V1.set(dx / L, 0, dz / L));
+  sfxAt('impact', best.pos, { vol: 1, rate: 0.8 }); sparks(best.hitboxes[0]?.c || best.pos, 6);
+  return true;
+}
+export function nearestBoarder(o, maxD) {
+  let best = null, bd = maxD;
+  for (const e of enemies) if (e instanceof Boarder && e.alive && e.leapT >= 1) { const d = Math.hypot(e.pos.x - o.x, e.pos.z - o.z); if (d < bd) { bd = d; best = e; } }
+  return best;
+}
+// 화면 밖 위협 표시용
+export function threats(out) {
+  out.length = 0;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    if (e instanceof Boarder) out.push({ p: e.hitboxes[0]?.c || e.pos, kind: e.looting ? 'loot' : 'boarder' });
+    else if (e instanceof Walker) out.push({ p: e.hitboxes[0].c, kind: 'walker' });
+  }
+  for (const s of shells) out.push({ p: s.p, kind: 'shell' });
+  return out;
 }
 
 export function raycastEnemies(o, d, maxT) {

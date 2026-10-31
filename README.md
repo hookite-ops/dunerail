@@ -3,4 +3,5 @@
 사막을 달리는 장거리 열차 위에서 산적·기계 병기와 싸우는 모바일 웹 이동형 FPS.
 nginx 정적 사이트(포트 8080) — Cloud Run 지속 배포.
 
-음원: Kenney Starter Kits (CC0). 3D 모델: Blender로 직접 제작.
+- 3D 모델: Blender로 직접 제작 (객차 5종·기관차·산적·바이크·보행 전차·드론·소총)
+- 음원: Kenney Starter Kits (CC0). 총성은 CC0 충격음에 짧은 합성 폭음을 겹쳐 보강.

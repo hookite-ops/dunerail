@@ -4,7 +4,12 @@ import { G, TRAIN, clamp, rand, damp } from './state.js';
 import { initRenderer, loadModels, buildTrain, updateWorld, trainGroup } from './world.js';
 import { initFx, updateFx, resizeFx, sparks } from './fx.js';
 import { P, initInput, initPlayer, resetPlayer, updatePlayer, updateHeatHidden } from './player.js';
-import { spawnBike, spawnDrones, spawnWalker, updateEnemies, clearEnemies, liveCount, enemies } from './enemies.js';
+import { spawnBike, spawnDrones, spawnWalker, updateEnemies, clearEnemies, liveCount, enemies, threats } from './enemies.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import * as UI from './ui.js';
 import { initAudio, sfx, loop, setLoop, suspendAudio } from './audio.js';
 
@@ -15,6 +20,7 @@ G.sens = parseFloat(store.get('dr_sens') || '1'); el.sens.value = G.sens;
 // ── 부팅 ───────────────────────────────────────────────
 initRenderer(el.c);
 initFx();
+initPost();
 const best = parseInt(store.get('dr_best') || '0', 10);
 if (best) el.bestTxt.textContent = `최고 기록 · ${best}구간`;
 el.btnStart.disabled = true;
@@ -50,7 +56,7 @@ async function startRun() {
 }
 function startStage() {
   clearEnemies();
-  G.stageTime = 0; G.bossDone = false; G.bossAlive = false; G.storm = 0; G.arriving = false; G.departing = G.stage > 1;
+  G.stageTime = 0; G.bossDone = false; G._slowDone = false; G.streak = 0; G.bossAlive = false; G.storm = 0; G.arriving = false; G.departing = G.stage > 1;
   events = makeEvents(G.stage); trickle = 0;
   UI.setWave(`${G.stage}구간 · 출발`);
   UI.toast(G.stage === 1 ? '오아시스 익스프레스 출발! 금고를 지켜라' : `${G.stage}구간 출발 — 습격이 거세진다`);
@@ -73,10 +79,11 @@ function onResize() {
   G.camera.aspect = w / h; G.camera.updateProjectionMatrix();
   G.vmCamera.aspect = w / h; G.vmCamera.updateProjectionMatrix();
   resizeFx();
+  composer?.setSize(w, h); bloom?.resolution.set(w / 2, h / 2);
 }
 
 // ── 웨이브 ─────────────────────────────────────────────
-let events = [], trickle = 0;
+let events = [], trickle = 0; const threatList = [];
 function makeEvents(stage) {
   const x = stage - 1;
   const b = (n) => () => { for (let i = 0; i < n + Math.floor(x * 0.7); i++) setTimeout(() => G.state !== 'title' && spawnBike(i % 2 ? 1 : -1), i * 900); };
@@ -84,8 +91,9 @@ function makeEvents(stage) {
   const w = () => spawnWalker();
   const say = (t) => () => UI.setWave(`${G.stage}구간 · ${t}`);
   return [
-    { t: 4, f: [say('산적 출현'), b(2)] },
-    { t: 22, f: [b(2)] },
+    { t: 2, f: [say('산적 출현'), b(2)] },
+    { t: 12, f: [b(1)] },
+    { t: 24, f: [b(2)] },
     { t: 38, f: [say('드론 떼'), d(4)] },
     { t: 55, f: [say('보행 전차'), w, b(1)] },
     { t: 76, f: [say('산적 습격대'), b(3)] },
@@ -156,11 +164,11 @@ function arrive() {
 
 // ── 정비소 ─────────────────────────────────────────────
 const SHOP = [
-  { k: 'dmg', t: '강선 총열', d: '레버액션 소총 피해 +20%', cost: (l) => 40 + l * 30, max: 5 },
-  { k: 'mag', t: '확장 탄창', d: '탄창 +3발', cost: (l) => 35 + l * 25, max: 4 },
-  { k: 'hp', t: '방탄 조끼', d: '최대 체력 +25', cost: (l) => 45 + l * 35, max: 4 },
-  { k: 'vault', t: '금고 철판', d: '산적의 약탈 속도 -20%', cost: (l) => 40 + l * 30, max: 3 },
-  { k: 'cool', t: '냉각 재킷', d: '거치 기관총 과열 -25%', cost: (l) => 30 + l * 25, max: 3 },
+  { k: 'dmg', t: '강선 총열', d: '레버액션 소총 피해 +20%', cost: (l) => 60 + l * 45, max: 5 },
+  { k: 'mag', t: '확장 탄창', d: '탄창 +3발', cost: (l) => 50 + l * 40, max: 4 },
+  { k: 'hp', t: '방탄 조끼', d: '최대 체력 +25', cost: (l) => 70 + l * 50, max: 4 },
+  { k: 'vault', t: '금고 철판', d: '산적의 약탈 속도 -20%', cost: (l) => 60 + l * 45, max: 3 },
+  { k: 'cool', t: '냉각 재킷', d: '거치 기관총 과열 -25%', cost: (l) => 45 + l * 40, max: 3 },
   { k: 'repair', t: '금고 보수', d: '약탈 게이지 -50%', cost: () => 25, once: true },
   { k: 'heal', t: '붕대와 물', d: '체력을 전부 회복', cost: () => 15, once: true },
 ];
@@ -232,13 +240,16 @@ const dprMax = dpr;
 function frame(now) {
   requestAnimationFrame(frame);
   let dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (G.bossDone && !G._slowDone) { G._slowDone = true; G.slowT = 1.4; UI.toast('철갑 거상 격파!'); }
+  if (G.slowT > 0) { G.slowT -= dt; dt *= 0.3; }
   tick(dt);
   render();
   // 적응형 해상도: 프레임이 밀리면 픽셀 비율을 낮춘다
   perfAcc += dt; perfN++;
   if (perfAcc > 2.5) {
     const avg = perfAcc / perfN; perfAcc = 0; perfN = 0;
-    if (avg > 1 / 44 && dpr > 0.75) { dpr = Math.max(0.75, dpr - 0.15); G.renderer.setPixelRatio(dpr); onResize(); }
+    if (avg > 1 / 44 && fxOn && dpr <= 1.0) { fxOn = false; }
+    else if (avg > 1 / 44 && dpr > 0.75) { dpr = Math.max(0.75, dpr - 0.15); G.renderer.setPixelRatio(dpr); onResize(); }
     else if (avg < 1 / 57 && dpr < dprMax) { dpr = Math.min(dprMax, dpr + 0.1); G.renderer.setPixelRatio(dpr); onResize(); }
   }
 }
@@ -256,6 +267,8 @@ function tick(dt) {
       updatePickups(dt);
       updateHeatHidden();
       UI.setLoot(G.loot); UI.setScrap(G.scrap);
+      UI.indicators(threats(threatList));
+      if (grade) { grade.uniforms.uStorm.value = G.storm; }
       if (P.dead) gameOver('hp');
       else if (G.loot >= 1) gameOver('loot');
       // 소리
@@ -274,10 +287,35 @@ function tick(dt) {
 }
 // 테스트용: 렌더 없이 게임 시간을 빨리 돌림
 window.__sim = (sec, step = 1 / 30) => { for (let t = 0; t < sec; t += step) tick(step); };
+// ── 후처리: 블룸(반해상도) + 색보정·비네트 ─────────────
+var composer, bloom, grade, fxOn = true;
+function initPost() {
+  const r = G.renderer;
+  composer = new EffectComposer(r);
+  composer.addPass(new RenderPass(G.scene, G.camera));
+  bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.32, 0.55, 0.88);
+  composer.addPass(bloom);
+  grade = new ShaderPass({
+    uniforms: { tDiffuse: { value: null }, uHurt: { value: 0 }, uStorm: { value: 0 } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.); }',
+    fragmentShader: `uniform sampler2D tDiffuse; uniform float uHurt, uStorm; varying vec2 vUv;
+      void main(){ vec4 c = texture2D(tDiffuse, vUv);
+        float l = dot(c.rgb, vec3(0.299,0.587,0.114));
+        c.rgb = mix(vec3(l), c.rgb, 1.08);                                   // 채도 살짝
+        c.rgb = c.rgb * vec3(1.04, 1.0, 0.94);                               // 따뜻한 색
+        c.rgb = (c.rgb - 0.5) * 1.06 + 0.5;                                  // 대비
+        vec2 d = vUv - 0.5; float v = smoothstep(0.85, 0.25, length(d * vec2(1.0, 0.8)));
+        c.rgb *= mix(0.72, 1.0, v);
+        c.rgb = mix(c.rgb, vec3(0.75, 0.52, 0.34), uStorm * 0.12);
+        gl_FragColor = c; }`,
+  });
+  composer.addPass(grade);
+  composer.addPass(new OutputPass());
+}
 function render() {
   const r = G.renderer;
-  r.clear();
-  r.render(G.scene, G.camera);
+  if (fxOn && composer) { r.autoClear = true; composer.render(); r.autoClear = false; }
+  else { r.clear(); r.render(G.scene, G.camera); }
   if ((G.state === 'play' || G.state === 'pause') && !P.mounted) { r.clearDepth(); r.render(G.vmScene, G.vmCamera); }
 }
 setState('title');

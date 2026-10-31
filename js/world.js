@@ -71,7 +71,7 @@ export function initRenderer(canvas) {
   r.setPixelRatio(Math.min(devicePixelRatio, G.touch ? 1.5 : 2));
   r.setSize(innerWidth, innerHeight, false);
   r.outputColorSpace = THREE.SRGBColorSpace;
-  r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.05;
+  r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 0.9;
   r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap;
   r.autoClear = false;
   G.renderer = r;
@@ -92,14 +92,25 @@ function addSky() {
   const geo = new THREE.SphereGeometry(800, 32, 16);
   const mat = new THREE.ShaderMaterial({
     side: THREE.BackSide, depthWrite: false, fog: false,
-    uniforms: { sunDir: { value: SUN_DIR }, storm: { value: 0 } },
+    uniforms: { sunDir: { value: SUN_DIR }, storm: { value: 0 }, time: { value: 0 } },
     vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
-    fragmentShader: `varying vec3 vDir; uniform vec3 sunDir; uniform float storm;
+    fragmentShader: `varying vec3 vDir; uniform vec3 sunDir; uniform float storm; uniform float time;
+      float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+      float vnoise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.-2.*f);
+        return mix(mix(hash(i),hash(i+vec2(1,0)),f.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x), f.y); }
+      float fbm(vec2 p){ float v=0., a=.5; for(int i=0;i<4;i++){ v+=a*vnoise(p); p*=2.03; a*=.5; } return v; }
       void main(){ float h = vDir.y;
         vec3 top = vec3(0.17,0.12,0.26), mid = vec3(0.86,0.45,0.27), hor = vec3(1.0,0.74,0.46);
         vec3 c = mix(hor, mid, smoothstep(0.0,0.18,h)); c = mix(c, top, smoothstep(0.18,0.75,h));
         float s = max(dot(normalize(vDir), sunDir), 0.0);
         c += vec3(1.0,0.62,0.3)*pow(s,8.0)*0.55 + vec3(1.0,0.9,0.7)*smoothstep(0.9975,0.999,s);
+        // 얇은 새털구름 (지평선 쪽은 해 색으로 물듦)
+        if (h > 0.02) {
+          vec2 uv = vDir.xz / (h + 0.25) * 1.6 + vec2(time*0.004, time*0.01);
+          float cl = smoothstep(0.55, 0.85, fbm(uv * vec2(1.0, 3.2)));
+          vec3 cc = mix(vec3(1.0,0.78,0.6), vec3(1.0,0.55,0.38), smoothstep(0.0,0.3,h)) + vec3(1.0,0.6,0.3)*pow(s,4.0)*0.6;
+          c = mix(c, cc, cl * smoothstep(0.02, 0.12, h) * 0.75);
+        }
         c = mix(c, vec3(0.78,0.52,0.32), storm*0.85);
         if (h < 0.0) c = mix(hor, vec3(0.78,0.52,0.32), storm);
         gl_FragColor = vec4(c,1.); }`,
@@ -114,13 +125,13 @@ function addSky() {
   envScene.add(envSky, floor);
   const pm = new THREE.PMREMGenerator(G.renderer);
   const env = pm.fromScene(envScene, 0.02).texture;
-  G.scene.environment = env; G.scene.environmentIntensity = 0.7;
+  G.scene.environment = env; G.scene.environmentIntensity = 0.9;
   G.vmScene.environment = env; G.vmScene.environmentIntensity = 0.9;
 }
 function addLights() {
-  const hemi = new THREE.HemisphereLight(0xffd6a8, 0x8a5030, 1.25); G.scene.add(hemi);
-  sun = new THREE.DirectionalLight(0xffc68a, 2.6);
-  sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024);
+  const hemi = new THREE.HemisphereLight(0xffd2a0, 0x7a4026, 1.05); G.scene.add(hemi);
+  sun = new THREE.DirectionalLight(0xffc080, 3.1);
+  sun.castShadow = true; sun.shadow.mapSize.set(G.touch ? 1024 : 2048, G.touch ? 1024 : 2048);
   const sc = sun.shadow.camera; sc.left = -18; sc.right = 18; sc.top = 18; sc.bottom = -18; sc.near = 1; sc.far = 120;
   sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.03;
   G.scene.add(sun, sun.target);
@@ -135,11 +146,35 @@ export function updateSunFollow(p) {
 }
 
 // ── 사막 ─────────────────────────────────────────────────
-const scroll = { props: [], mesas: [], ground: null, bed: null };
+const scroll = { props: [], mesas: [], ground: null, bed: null, S: 0, uS: { value: 0 } };
+// GLSL duneH와 같은 식 (소품을 언덕 위에 앉히려고)
+export function duneH(x, z) {
+  const zz = z - scroll.S, ax = Math.abs(x);
+  const ss = (a, b, v) => { const t = Math.min(1, Math.max(0, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
+  return ss(16, 46, ax) * (3.4 * Math.sin(x * 0.021 + zz * 0.013) + 2.3 * Math.sin(x * 0.047 - zz * 0.031 + 1.7) + 1.1 * Math.sin(x * 0.11 + zz * 0.07 + 0.4) + 3.0)
+    + ss(9, 16, ax) * 0.25 * Math.sin(zz * 0.2 + x) - 0.05;
+}
 function addDesert() {
-  const gmat = new THREE.MeshStandardMaterial({ map: TEX.sand, roughness: 1, color: 0xffffff });
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(1200, 1200), gmat);
-  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; G.scene.add(ground); scroll.ground = ground;
+  // 모래언덕 지형: 정점 셰이더에서 높이를 만들고 열차 진행에 맞춰 흘려보낸다 (CPU와 같은 식 = duneH)
+  const gmat = new THREE.MeshStandardMaterial({ map: TEX.sand, roughness: 0.95, color: 0xe6d2bc });
+  gmat.onBeforeCompile = (sh) => {
+    sh.uniforms.uS = scroll.uS;
+    const H = `uniform float uS;
+      float duneH(vec2 p){ float zz = p.y - uS; float ax = abs(p.x); float fl = smoothstep(16.0, 46.0, ax);
+        return fl * (3.4*sin(p.x*0.021 + zz*0.013) + 2.3*sin(p.x*0.047 - zz*0.031 + 1.7) + 1.1*sin(p.x*0.11 + zz*0.07 + 0.4) + 3.0)
+             + smoothstep(9.0, 16.0, ax) * 0.25 * sin(zz*0.2 + p.x); }`;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\n' + H)
+      .replace('#include <beginnormal_vertex>', `vec2 wxz = (modelMatrix*vec4(position,1.)).xz;
+        float e = 0.6; float h0 = duneH(wxz);
+        float dx = (duneH(wxz+vec2(e,0.)) - h0)/e, dz = (duneH(wxz+vec2(0.,e)) - h0)/e;
+        vec3 objectNormal = normalize(vec3(-dx, dz, 1.0));
+        #ifdef USE_TANGENT
+          vec3 objectTangent = vec3( tangent.xyz );
+        #endif`)
+      .replace('#include <begin_vertex>', 'vec3 transformed = vec3(position); transformed.z += h0;');
+  };
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(1200, 1200, 180, 180), gmat);
+  ground.rotation.x = -Math.PI / 2; ground.position.y = -0.05; ground.receiveShadow = true; G.scene.add(ground); scroll.ground = ground;
   // 선로 바닥(자갈+침목)
   const bt = TEX.gravel; bt.repeat.set(1, 150);
   const bed = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.3, 600), new THREE.MeshStandardMaterial({ map: bt, roughness: 1 }));
@@ -210,7 +245,7 @@ function setupProps() {
         for (let i = 0; i < items.length; i++) {
           const it = items[i];
           q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, k.poles ? 0 : it.ry);
-          m4.compose(p.set(it.x, 0, it.z), q, sc.setScalar(it.s));
+          m4.compose(p.set(it.x, duneH(it.x, it.z) - 0.1, it.z), q, sc.setScalar(it.s));
           for (const m of meshes) m.setMatrixAt(i, m4);
         }
         for (const m of meshes) m.instanceMatrix.needsUpdate = true;
@@ -228,7 +263,9 @@ function setupWires() {
 
 export function updateWorld(dt) {
   const dz = G.speed * dt;
+  scroll.S += dz; scroll.uS.value = scroll.S;
   scroll.ground.material.map.offset.y += dz * (80 / 1200);
+  sky.material.uniforms.time.value = G.time;
   scroll.bed.material.map.offset.y += dz * (150 / 600);
   for (const m of scroll.mesas) { m.position.z += dz * 0.06; if (m.position.z > 520) m.position.z -= 1220; }
   for (const grp of scroll.props) {
@@ -262,7 +299,7 @@ export function updateWorld(dt) {
 // ── 모델 불러오기 ──────────────────────────────────────────
 export async function loadModels(onProgress) {
   const loader = new GLTFLoader();
-  const names = ['locomotive', 'bogie', 'bike', 'walker', 'drone', 'rifle', 'props'];
+  const names = ['locomotive', 'bogie', 'bike2', 'bandit', 'walker', 'drone', 'rifle', 'props', 'train_props', 'car_flatgun', 'car_freight', 'car_flatrepair', 'car_passenger', 'car_caboose'];
   let done = 0;
   await Promise.all(names.map(async (n) => {
     const g = await loader.loadAsync(`assets/models/${n}.glb`);
@@ -285,8 +322,8 @@ export function buildTrain() {
     freight: new THREE.MeshStandardMaterial({ map: TEX.planks, color: 0xa04a2c, roughness: 0.8 }),
     pass: new THREE.MeshStandardMaterial({ map: TEX.planks, color: 0x3f6b5f, roughness: 0.7 }),
     caboose: new THREE.MeshStandardMaterial({ map: TEX.planks, color: 0xb23a26, roughness: 0.75 }),
-    roof: new THREE.MeshStandardMaterial({ map: TEX.metal, color: 0x3a3330, roughness: 0.55, metalness: 0.6 }),
-    iron: new THREE.MeshStandardMaterial({ map: TEX.metal, color: 0x4a4440, roughness: 0.5, metalness: 0.7 }),
+    roof: new THREE.MeshStandardMaterial({ map: TEX.metal, color: 0x7a3a26, roughness: 0.6, metalness: 0.3 }),
+    iron: new THREE.MeshStandardMaterial({ map: TEX.metal, color: 0x6a5f57, roughness: 0.55, metalness: 0.4 }),
     crate: new THREE.MeshStandardMaterial({ map: TEX.crate, roughness: 0.9 }),
     canvas: new THREE.MeshStandardMaterial({ map: TEX.canvas, roughness: 1 }),
     seat: new THREE.MeshStandardMaterial({ color: 0x7a2a22, roughness: 0.8 }),
@@ -310,6 +347,8 @@ export function buildTrain() {
     return mats.iron;
   };
   const byMat = new Map();
+  const inst = { crate: [], bags: [], seat: [] };
+  const STRUCT = ['바닥', '벽', '지붕', '난간', '환기구'];
   G.boxes = [];
   for (const s of M.solids) {
     const y = s.y || 0;
@@ -318,17 +357,13 @@ export function buildTrain() {
     else if (s.type === 'cyl') { min = [s.x - s.r * 0.8, y, s.z - s.r * 0.8]; max = [s.x + s.r * 0.8, y + s.h, s.z + s.r * 0.8]; }
     else continue;
     G.boxes.push({ min, max, tag: s.tag });
+    // 겉모습: 객차 몸체는 Blender 모델, 소품은 인스턴스, 나머지만 상자
     if (LOCO_TAGS.some((t) => s.tag.includes(t)) || s.tag.includes('거치')) continue;
+    if (STRUCT.some((t) => s.tag.includes(t))) continue;
+    if (s.tag.includes('상자') || s.tag.includes('공구함')) { inst.crate.push(s); continue; }
+    if (s.tag.includes('모래주머니')) { inst.bags.push(s); continue; }
+    if (s.tag.includes('좌석')) { inst.seat.push(s); continue; }
     const g = new THREE.BoxGeometry(s.w, s.h, s.d);
-    // 판자 무늬가 늘어나지 않게 UV를 실제 크기에 맞춤
-    const uv = g.attributes.uv, nor = g.attributes.normal;
-    for (let i = 0; i < uv.count; i++) {
-      const nx = Math.abs(nor.getX(i)), ny = Math.abs(nor.getY(i));
-      const u = uv.getX(i), v = uv.getY(i);
-      if (nx > 0.5) uv.setXY(i, u * s.d * 0.5, v * s.h * 0.5);
-      else if (ny > 0.5) uv.setXY(i, u * s.w * 0.5, v * s.d * 0.5);
-      else uv.setXY(i, u * s.w * 0.5, v * s.h * 0.5);
-    }
     g.translate(s.x, y + s.h / 2, s.z);
     const m = pickMat(s.tag);
     if (!byMat.has(m)) byMat.set(m, []);
@@ -337,28 +372,55 @@ export function buildTrain() {
   for (const [m, geos] of byMat) {
     const mesh = new THREE.Mesh(mergeGeometries(geos), m); mesh.castShadow = mesh.receiveShadow = true; trainGroup.add(mesh);
   }
-  // 금고
+  // 객차 모델 (Blender) — 충돌 상자와 같은 치수
+  const cars = [null, 'car_flatgun', 'car_freight', 'car_flatrepair', 'car_passenger', 'car_caboose'];
+  for (let i = 1; i < 6; i++) {
+    const [z0, z1] = TRAIN.carZ(i);
+    const c = G.models[cars[i]].clone(true); c.position.set(0, 0, (z0 + z1) / 2); trainGroup.add(c);
+    for (const z of [z0 + 2.4, z1 - 2.4]) { const b = G.models.bogie.clone(true); b.position.set(0, 0, z); trainGroup.add(b); }
+  }
+  // 소품 인스턴스
+  const TP = G.models.train_props;
+  const place = (nodeName, list, size) => {
+    if (!list.length) return;
+    const node = TP.getObjectByName(nodeName);
+    node.updateWorldMatrix(true, true);
+    const inv = new THREE.Matrix4().copy(node.matrixWorld).invert();
+    const groups = new Map();
+    node.traverse((o) => {
+      if (!o.isMesh) return;
+      const g = o.geometry.clone().applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld));
+      for (const k of Object.keys(g.attributes)) if (!['position', 'normal'].includes(k)) g.deleteAttribute(k);
+      if (!groups.has(o.material)) groups.set(o.material, []);
+      groups.get(o.material).push(g);
+    });
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
+    for (const [mat, geos] of groups) {
+      const im = new THREE.InstancedMesh(mergeGeometries(geos), mat, list.length);
+      list.forEach((s, i) => {
+        q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, s.rot || 0);
+        m4.compose(p.set(s.x, s.y || 0, s.z), q, size ? sc.set(s.w / size[0], s.h / size[1], s.d / size[2]) : sc.set(1, 1, 1));
+        im.setMatrixAt(i, m4);
+      });
+      im.castShadow = im.receiveShadow = true; trainGroup.add(im);
+    }
+  };
+  inst.crate.forEach((s, i) => { s.rot = (i % 2) * Math.PI / 2; });
+  place('Crate', inst.crate, [1, 1, 1]);
+  inst.bags.forEach((s, i) => { s.rot = i % 2 ? Math.PI : 0; });
+  place('Sandbags', inst.bags, [1.0, 1.04, 0.66]);
+  inst.seat.forEach((s) => { s.y = TRAIN.FLOOR - 0.0; s.rot = 0; });
+  place('Seat', inst.seat, null);
+  // 금고 (Blender 모델)
   const v = VAULT;
   G.boxes.push({ min: [v.x - v.w / 2, TRAIN.FLOOR, v.z - v.d / 2], max: [v.x + v.w / 2, TRAIN.FLOOR + v.h, v.z + v.d / 2], tag: '금고' });
-  const vault = new THREE.Group();
-  const vb = new THREE.Mesh(new THREE.BoxGeometry(v.w, v.h, v.d), new THREE.MeshStandardMaterial({ color: 0x2f3a36, metalness: 0.85, roughness: 0.35, map: TEX.metal }));
-  vb.position.y = v.h / 2; vault.add(vb);
-  const dial = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.05, 20), mats.brass); dial.rotation.x = Math.PI / 2; dial.position.set(0, v.h * 0.55, v.d / 2 + 0.02); vault.add(dial);
-  const hdl = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.3, 0.05), mats.brass); hdl.position.set(0.25, v.h * 0.55, v.d / 2 + 0.04); vault.add(hdl);
-  const gold = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.25), new THREE.MeshStandardMaterial({ color: 0xffc94a, metalness: 1, roughness: 0.25, emissive: 0x442a00 }));
-  gold.position.set(0, v.h + 0.06, 0); vault.add(gold);
-  vault.position.set(v.x, TRAIN.FLOOR, v.z); vault.rotation.y = Math.PI / 2; vault.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  const vault = TP.getObjectByName('Vault').clone(true);
+  vault.position.set(v.x, TRAIN.FLOOR, v.z); vault.rotation.y = Math.PI / 2;
+  vault.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   trainGroup.add(vault); G.vaultMesh = vault;
 
   // 기관차 GLB (중심 z=-34)
   const loco = G.models.locomotive.clone(true); loco.position.set(0, 0, -34); trainGroup.add(loco); G.loco = loco;
-  // 대차
-  for (let i = 1; i < 6; i++) {
-    const [z0, z1] = TRAIN.carZ(i);
-    for (const z of [z0 + 2.4, z1 - 2.4]) { const b = G.models.bogie.clone(true); b.position.set(0, 0, z); trainGroup.add(b); }
-    // 차체 밑 프레임
-    const fr = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.25, 11.6), mats.iron); fr.position.set(0, 0.95, (z0 + z1) / 2); trainGroup.add(fr);
-  }
   // 사다리 (기관차 앞쪽 것 제외)
   G.ladders = [];
   const ladM = mats.iron;
@@ -370,18 +432,18 @@ export function buildTrain() {
     for (let k = 0; k < 7; k++) { const r = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.04, 0.04), ladM); r.position.set(0, 1.5 + k * 0.42, 0); grp.add(r); }
     grp.position.set(p.x, 0, p.z); trainGroup.add(grp);
   }
-  // 화물칸 간판
+  // 화물칸 간판 (판자벽 위쪽 띠)
   const sign = canvasTex(512, (g, s) => {
-    g.clearRect(0, 0, s, s); g.fillStyle = '#f2d39a'; g.fillRect(0, s * 0.3, s, s * 0.4);
-    g.fillStyle = '#5a2414'; g.font = '900 64px "Black Han Sans", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.fillText('OASIS EXPRESS', s / 2, s / 2 - 10); g.font = '700 26px sans-serif'; g.fillText('오아시스 익스프레스 · 금고 화물', s / 2, s / 2 + 42);
+    g.clearRect(0, 0, s, s); g.fillStyle = '#efd29a'; g.fillRect(0, s * 0.36, s, s * 0.28);
+    g.strokeStyle = '#5a2414'; g.lineWidth = 6; g.strokeRect(8, s * 0.36 + 8, s - 16, s * 0.28 - 16);
+    g.fillStyle = '#5a2414'; g.font = '900 58px "Black Han Sans", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('OASIS EXPRESS', s / 2, s / 2 + 2);
   });
   sign.wrapS = sign.wrapT = THREE.ClampToEdgeWrapping;
-  for (const sx of [-1, 1]) {
-    for (const zc of [-11, -3.4]) {
-      const pl = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 3.2), new THREE.MeshStandardMaterial({ map: sign, transparent: true, roughness: 0.8 }));
-      pl.position.set(sx * 1.515, 3.15, zc); pl.rotation.y = sx * Math.PI / 2; trainGroup.add(pl);
-    }
+  const signM = new THREE.MeshStandardMaterial({ map: sign, transparent: true, roughness: 0.8 });
+  for (const sx of [-1, 1]) for (const zc of [-11.1, -3.3]) {
+    const pl = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 3.4), signM);
+    pl.position.set(sx * 1.53, 3.55, zc); pl.rotation.y = sx * Math.PI / 2; trainGroup.add(pl);
   }
   buildMountedGun();
   setupProps(); setupWires();
