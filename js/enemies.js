@@ -4,7 +4,7 @@ import { G, TRAIN, clamp, rand, pick, damp } from './state.js';
 import { moveBody, rayBoxes, lineOfSight, groundAt, blocked, VAULT } from './world.js';
 import { P, hurtPlayer } from './player.js';
 import * as UI from './ui.js';
-import { sfxAt, sfx, gunshot } from './audio.js';
+import { sfxAt, sfx, gunshot, hitSound } from './audio.js';
 import { dust, smoke, explosion, sparks, blood, tracer, puff, muzzleWorld } from './fx.js';
 
 export const enemies = [];
@@ -27,10 +27,9 @@ class Enemy {
     UI.floater(point, Math.round(amount), crit ? 'crit' : '');
     blood(point);
     G.controls?.haptic(this.hp - amount <= 0 ? 'kill' : 'hit');
-    if (crit) sfx('coin', { vol: 0.45, rate: 1.7, jitter: 0 });
-    else sfx('toggle', { vol: 0.32, rate: 2.2 });
+    hitSound(this.hp <= 0 ? 'kill' : crit ? 'head' : 'hit');
     if (this.hp <= 0) {
-      this.alive = false; UI.hitmarker(true); G.kills++;
+      this.alive = false; UI.hitmarker(true); G.kills++; G.hitstop = 0.05;
       if (crit) UI.floater(point.clone().add(V3.set(0, 0.35, 0)), '헤드샷!', 'crit');
       this.lastDir = dir ? dir.clone() : null;
       this.die(); onKill(point);
@@ -75,7 +74,7 @@ function enemyShot(from, acc, dmg) {
 }
 
 // ── 산적 몸 (bandit.glb) ───────────────────────────────
-function makeBandit() {
+export function makeBandit() {
   const { m, mats } = cloneModel('bandit');
   const j = {}; for (const n of ['Hips', 'Spine', 'Head', 'ArmL', 'ArmR', 'LegL', 'LegR', 'KneeL', 'KneeR']) j[n] = m.getObjectByName(n);
   j.muzzle = m.getObjectByName('muzzle_ref');
@@ -84,11 +83,11 @@ function makeBandit() {
   for (const mt of mats) if (mt.name === 'ShirtRed') mt.color.setHex(tint);
   return { m, mats, j };
 }
-function poseSeated(j) {
+export function poseSeated(j) {
   j.LegL.rotation.x = j.LegR.rotation.x = 1.3; j.KneeL.rotation.x = j.KneeR.rotation.x = -1.35;
   j.Spine.rotation.x = -0.18; j.ArmL.rotation.set(1.05, 0, -0.2);
 }
-function aimArm(j, ownerYaw, target, base) {
+export function aimArm(j, ownerYaw, target, base) {
   // 오른팔을 목표 쪽으로 (몸 기준 좌우 + 높낮이)
   const wp = j.ArmR.getWorldPosition(V3);
   const dx = target.x - wp.x, dy = target.y - wp.y, dz = target.z - wp.z;
@@ -203,6 +202,7 @@ function buildNav() {
   }
   NAV.dist = dist; NAV.walk = walk;
 }
+export function navGrid() { if (!NAV.dist) buildNav(); return NAV; }
 function navDir(x, z, out) {
   if (!NAV.dist) buildNav();
   const { c, x0, z0, nx, nz, dist } = NAV;

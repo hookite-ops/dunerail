@@ -12,6 +12,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import * as UI from './ui.js';
 import { initAudio, sfx, loop, setLoop, suspendAudio } from './audio.js';
+import { initMp, openMenu, mpTick, leave as mpLeave, mpPropsVisible } from './mp.js';
 
 const el = UI.el;
 const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
@@ -23,12 +24,14 @@ initFx();
 initPost();
 const best = parseInt(store.get('dr_best') || '0', 10);
 if (best) el.bestTxt.textContent = `최고 기록 · ${best}구간`;
-el.btnStart.disabled = true;
+el.btnStart.disabled = true; el.btnMulti.disabled = true;
 loadModels((f) => { el.loadTxt.textContent = `짐 싣는 중… ${Math.round(f * 100)}%`; })
   .then(() => {
     buildTrain(); initPlayer(); initInput(); buildStation(); buildPickups();
     resetPlayer(true);
-    el.loadTxt.textContent = ''; el.btnStart.disabled = false;
+    initMp({ setState, enterMp });
+    mpPropsVisible(false);
+    el.loadTxt.textContent = ''; el.btnStart.disabled = false; el.btnMulti.disabled = false;
     G.speed = G.targetSpeed;
     requestAnimationFrame(frame);
   })
@@ -37,9 +40,14 @@ loadModels((f) => { el.loadTxt.textContent = `짐 싣는 중… ${Math.round(f *
 // ── 화면 전환 ──────────────────────────────────────────
 function setState(s) {
   G.state = s;
-  G.controls?.setVisible(s === 'play');
+  const mp = G.mode === 'mp';
+  G.controls?.setVisible(s === 'play' && !(mp && P.dead));
   UI.show('hud', s === 'play' || s === 'pause');
   UI.show('title', s === 'title'); UI.show('pause', s === 'pause'); UI.show('shop', s === 'shop'); UI.show('over', s === 'over');
+  UI.show('mpMenu', s === 'mpmenu'); UI.show('mpLobby', s === 'mplobby');
+  el.hud.classList.toggle('mp', mp);
+  el.btnQuit.textContent = mp ? '방 나가기' : '처음으로';
+  if (s === 'title') { G.mode = 'sp'; mpPropsVisible(false); el.hud.classList.remove('mp'); }
   if (s !== 'play' && document.pointerLockElement) document.exitPointerLock?.();
   P.firing = false;
 }
@@ -48,6 +56,7 @@ async function startRun() {
   loop('engine', { vol: 0 }); loop('engine-motorcycle', { vol: 0 });
   try { if (G.touch && !document.fullscreenElement) await document.documentElement.requestFullscreen({ navigationUI: 'hide' }); } catch {}
   try { await screen.orientation?.lock?.('landscape'); } catch {}
+  G.mode = 'sp'; UI.resetHud(); P.weapon = 'rifle';
   G.stage = 1; G.scrap = 0; G.totalScrap = 0; G.kills = 0; G.loot = 0;
   G.upgrades = { dmg: 0, mag: 0, hp: 0, vault: 0, cool: 0 };
   startStage();
@@ -63,7 +72,19 @@ function startStage() {
   UI.toast(G.stage === 1 ? '오아시스 익스프레스 출발! 금고를 지켜라' : `${G.stage}구간 출발 — 습격이 거세진다`);
 }
 el.btnStart.addEventListener('click', startRun);
-el.btnPause.addEventListener('click', () => { setState('pause'); suspendAudio(true); });
+el.btnMulti.addEventListener('click', async () => { await initAudio(); openMenu(); });
+// 멀티 경기 시작: 싱글 적·역을 치우고 열차만 달린다
+function enterMp() {
+  clearEnemies();
+  loop('engine', { vol: 0 }); loop('engine-motorcycle', { vol: 0 });
+  try { if (G.touch && !document.fullscreenElement) document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {}); } catch {}
+  try { screen.orientation?.lock?.('landscape').catch(() => {}); } catch {}
+  station.g.visible = false; station.z = -300; G.arriving = false; G.departing = false; G.storm = 0; G.stormTarget = 0;
+  G.speed = G.targetSpeed;
+  mpPropsVisible(true);
+  setState('play');
+}
+el.btnPause.addEventListener('click', () => { setState('pause'); if (G.mode !== 'mp') suspendAudio(true); });
 let settingsBuilt = false;
 const openSettings = () => {
   if (!settingsBuilt && G.controls) {
@@ -76,13 +97,13 @@ const openSettings = () => {
 };
 new MutationObserver(() => { if (!el.pause.classList.contains('hidden')) openSettings(); }).observe(el.pause, { attributes: true, attributeFilter: ['class'] });
 el.btnResume.addEventListener('click', () => { setState('play'); suspendAudio(false); });
-el.btnQuit.addEventListener('click', () => { clearEnemies(); suspendAudio(false); setState('title'); });
+el.btnQuit.addEventListener('click', () => { suspendAudio(false); if (G.mode === 'mp') { mpLeave(); return; } clearEnemies(); setState('title'); });
 el.btnRetry.addEventListener('click', startRun);
 el.btnHome.addEventListener('click', () => { clearEnemies(); setState('title'); });
 el.sfxToggle.addEventListener('change', () => { G.sfx = el.sfxToggle.checked; });
 el.btnDepart.addEventListener('click', () => { G.stage++; startStage(); setState('play'); sfx('toggle'); });
-addEventListener('keydown', (e) => { if (e.code === 'Escape' || e.code === 'KeyP') { if (G.state === 'play') { setState('pause'); suspendAudio(true); } else if (G.state === 'pause') { setState('play'); suspendAudio(false); } } });
-document.addEventListener('visibilitychange', () => { if (document.hidden && G.state === 'play') { setState('pause'); suspendAudio(true); } });
+addEventListener('keydown', (e) => { if (e.target?.tagName === 'INPUT') return; if (e.code === 'Escape' || e.code === 'KeyP') { if (G.state === 'play') { setState('pause'); if (G.mode !== 'mp') suspendAudio(true); } else if (G.state === 'pause') { setState('play'); suspendAudio(false); } } });
+document.addEventListener('visibilitychange', () => { if (document.hidden && G.state === 'play' && G.mode !== 'mp') { setState('pause'); suspendAudio(true); } });
 addEventListener('resize', onResize);
 function onResize() {
   const w = innerWidth, h = innerHeight;
@@ -253,6 +274,7 @@ function frame(now) {
   let dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (G.bossDone && !G._slowDone) { G._slowDone = true; G.slowT = 1.4; UI.toast('철갑 거상 격파!'); }
   if (G.slowT > 0) { G.slowT -= dt; dt *= 0.3; }
+  if (G.hitstop > 0) { G.hitstop -= dt; dt *= 0.12; }   // 처치 순간 아주 짧게 멈칫
   tick(dt);
   render();
   // 적응형 해상도: 프레임이 밀리면 픽셀 비율을 낮춘다
@@ -266,6 +288,17 @@ function frame(now) {
 }
 function tick(dt) {
   G.dt = dt;
+  if (G.mode === 'mp' && (G.state === 'play' || G.state === 'pause')) {   // 멀티는 일시정지 화면에서도 계속 돈다
+    G.time += dt;
+    G.speed = damp(G.speed, G.targetSpeed, 0.5, dt);
+    updateWorld(dt);
+    updatePlayer(dt);
+    mpTick(dt);
+    updateHeatHidden();
+    setLoop('engine', 0.22 * (G.speed / 24), 0.45 + G.speed / 60);
+    updateFx(dt);
+    return;
+  }
   const playing = G.state === 'play';
   if (G.state !== 'pause') {
     G.time += dt;
@@ -327,7 +360,7 @@ function render() {
   const r = G.renderer;
   if (fxOn && composer) { r.autoClear = true; composer.render(); r.autoClear = false; }
   else { r.clear(); r.render(G.scene, G.camera); }
-  if ((G.state === 'play' || G.state === 'pause') && !P.mounted) { r.clearDepth(); r.render(G.vmScene, G.vmCamera); }
+  if ((G.state === 'play' || G.state === 'pause') && !P.mounted && !P.dead) { r.clearDepth(); r.render(G.vmScene, G.vmCamera); }
 }
 setState('title');
 window.__G = G;

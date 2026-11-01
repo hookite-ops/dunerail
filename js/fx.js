@@ -136,3 +136,12 @@ export function updateFx(dt) {
   if (G.storm > 0.05) for (let i = 0; i < 3 * G.storm; i++) soft.emit({ x: cam.x + rand(-12, 12), y: rand(0.2, 5), z: cam.z + rand(-25, 5) }, { x: rand(2, 6), y: 0, z: 0 }, { life: 1.4, size: rand(1.5, 3), grow: 2, color: [0.82, 0.6, 0.4, 0.18 * G.storm], drag: 0, wind: 0.7 });
   if (shake.t > 0) { shake.t -= dt; if (shake.t <= 0) shake.amp = 0; }
 }
+// 탄피: 놋쇠 빛 작은 조각이 오른쪽으로 튐
+export function brass(p, v) {
+  glow.emit(p, v, { life: 0.5, size: 0.035, grow: 0, color: [1, 0.78, 0.35, 1], drag: 0.6, grav: 14 });
+}
+// 사람 피격: 천 조각·모래 먼지 (멀티)
+export function hitPuff(p, head) {
+  for (let i = 0; i < (head ? 12 : 7); i++) soft.emit(p, { x: rand(-2.2, 2.2), y: rand(0, 2.8), z: rand(-2.2, 2.2) }, { life: 0.45, size: rand(0.1, 0.24), grow: 0.6, color: head ? [0.72, 0.18, 0.12, 0.9] : [0.6, 0.35, 0.22, 0.85], drag: 3, grav: 6 });
+  if (head) sparks(p, 5, [1, 0.9, 0.5, 1]);
+}

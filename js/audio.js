@@ -95,3 +95,21 @@ export function setLoop(name, vol, rate) {
   if (rate) l.s.playbackRate.setTargetAtTime(rate, ctx.currentTime, 0.3);
 }
 export function suspendAudio(on) { if (!ctx) return; on ? ctx.suspend() : ctx.resume(); }
+
+// 맞힘 소리 — 짧고 또렷하게 (일반·헤드샷·처치)
+export function hitSound(kind = 'hit') {
+  if (!ctx || !G.sfx) return;
+  const t = ctx.currentTime;
+  if (kind !== 'kill' && t - (hitSound.last || 0) < 0.04) return;
+  hitSound.last = t;
+  const out = ctx.createGain(); out.gain.value = kind === 'kill' ? 0.55 : 0.4; out.connect(master);
+  const tone = (type, f0, f1, dur, vol, at = 0) => {
+    const o = ctx.createOscillator(); o.type = type;
+    o.frequency.setValueAtTime(f0, t + at); o.frequency.exponentialRampToValueAtTime(f1, t + at + dur);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t + at); g.gain.exponentialRampToValueAtTime(vol, t + at + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + at + dur);
+    o.connect(g); g.connect(out); o.start(t + at); o.stop(t + at + dur + 0.02);
+  };
+  if (kind === 'hit') { tone('square', 2100, 1500, 0.035, 0.35); tone('sine', 900, 500, 0.05, 0.4); }
+  else if (kind === 'head') { tone('triangle', 2900, 2700, 0.16, 0.5); tone('square', 2200, 1600, 0.03, 0.3); }
+  else if (kind === 'kill') { tone('sine', 140, 45, 0.22, 0.9); tone('triangle', 1250, 1240, 0.28, 0.35, 0.04); tone('triangle', 1870, 1860, 0.22, 0.22, 0.09); }
+}

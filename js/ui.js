@@ -105,3 +105,4 @@ export function setCharges(n, cd) {
   G.controls?.setDisabled('grenade', n <= 0);
 }
 export function show(id, on) { el[id].classList.toggle('hidden', !on); }
+export function resetHud() { lastHp = -1; lastLoot = -1; lastAmmo = ''; lastScrap = -1; lastRoute = -1; lastHeat = -1; }

@@ -44,6 +44,14 @@
   <div id="indicators"></div>
   <div id="streak"></div>
 
+  <!-- 멀티 HUD -->
+  <div id="mpTop" class="mp-only"><b id="mpScoreMe" class="me">0</b><div class="mid"><span id="mpRole" class="mp-role R">산적</span><i id="mpTimer">2:30</i></div><b id="mpScoreThem" class="them">0</b></div>
+  <div id="mpFeed" class="mp-only"></div>
+  <div id="mpMarks" class="mp-only"></div>
+  <div id="mpLoot" class="mp-only" style="display:none"><div class="ring"></div><span>금괴 터는 중</span></div>
+  <div id="mpCarry" class="mp-only" style="display:none">💰 금괴 운반 중 — <b>후미 발코니</b>로!</div>
+  <div id="mpBanner" class="mp-banner"></div>
+  <div id="mpDeath" class="hidden"><p id="mpDeathBy">쓰러졌다</p><p id="mpDeathT" class="t"></p><p class="pick-t">다음 무기</p><div id="mpDeathW" class="wpicks"></div></div>
   <!-- 터치 조작은 js/controls/mfc.js가 이 안에 그린다 -->
   <button id="btnUse" class="use hidden">탑승</button>
 </div>
@@ -57,7 +65,10 @@
     <h1>DUNE RAIL</h1>
     <h2>철로의 무법자</h2>
     <p class="lede">끝없이 달리는 오아시스 익스프레스. 산적과 기계 병기로부터 금고 화물을 지켜 다음 역까지 달려라.</p>
-    <button id="btnStart" class="btn primary">출발</button>
+    <div class="title-btns">
+      <button id="btnMulti" class="btn primary">멀티 · 열차 강도</button>
+      <button id="btnStart" class="btn">혼자 · 열차 방어</button>
+    </div>
     <p id="loadTxt" class="load">짐 싣는 중…</p>
     <p class="best" id="bestTxt"></p>
   </div>
@@ -67,7 +78,7 @@
     <li><b>발사</b> 누른 채 끌면 조준하며 사격</li>
     <li><b>스틱을 위로 끝까지</b> 끌어 떼면 자동 달리기 🔒</li>
     <li><b>달리다 앉기</b> = 슬라이딩</li>
-    <li><b>산적 코앞</b>에서 발사 = 개머리판으로 밀쳐내기</li>
+    <li><b>적 코앞</b>에서 발사 = 개머리판으로 밀쳐내기 (열차 밖으로!)</li>
     <li><b>🧨</b> 다이너마이트 · <b>사다리</b> 앞에서 밀면 지붕으로</li>
   </ul>
 </section>
@@ -100,6 +111,48 @@
     <h3 id="overTitle">금고를 빼앗겼다</h3>
     <div class="stats" id="overStats"></div>
     <div class="row"><button id="btnRetry" class="btn primary">다시 출발</button><button id="btnHome" class="btn">처음으로</button></div>
+  </div>
+</section>
+
+<!-- 멀티 메뉴 -->
+<section id="mpMenu" class="screen modal hidden">
+  <div class="card wide mp-card">
+    <p class="eyebrow">2~4명 · 산적 vs 경비</p>
+    <h3>열차 강도</h3>
+    <p class="sub">산적은 바이크로 쫓아가 금괴 2개를 털고, 경비는 끝까지 지킨다. 라운드마다 공수 교대, 먼저 2승.</p>
+    <label class="field"><span>내 이름</span><input id="mpName" maxlength="10" placeholder="무법자" autocomplete="off" /></label>
+    <div class="mp-actions">
+      <button id="mpQuick" class="btn primary">빠른 시작</button>
+      <button id="mpCreate" class="btn">방 만들기</button>
+      <button id="mpCreatePriv" class="btn">비밀방 만들기</button>
+    </div>
+    <div class="mp-join"><input id="mpCode" maxlength="4" placeholder="방 코드" autocomplete="off" /><button id="mpJoin" class="btn">참가</button></div>
+    <div class="mp-list-h"><b>열린 방</b><button id="mpRefresh" class="btn small">새로고침</button></div>
+    <div id="mpList" class="mp-list"></div>
+    <p id="mpMsg" class="mp-msg"></p>
+    <div class="row"><button id="mpPractice" class="btn">봇과 연습 (혼자)</button><button id="mpBack" class="btn">뒤로</button></div>
+  </div>
+</section>
+<section id="mpLobby" class="screen modal hidden">
+  <div class="card wide mp-card">
+    <p class="eyebrow">방 코드</p>
+    <div class="code-row"><h3 id="mpCodeTxt">----</h3><button id="mpCopy" class="btn small">복사</button></div>
+    <div class="sides">
+      <div class="side A"><p>A팀 <small>1라운드 산적</small></p><div id="mpSideA"></div></div>
+      <div class="side B"><p>B팀 <small>1라운드 경비</small></p><div id="mpSideB"></div></div>
+    </div>
+    <div class="row"><button id="mpSwap" class="btn small">편 바꾸기</button><label id="mpFillRow" class="toggle"><input id="mpFill" type="checkbox" checked /> 빈자리 봇 채우기</label></div>
+    <p class="pick-t">시작 무기</p>
+    <div id="mpLobbyW" class="wpicks"></div>
+    <div class="row"><button id="mpStart" class="btn primary">시작</button><p id="mpWait" class="mp-msg">방장이 시작하길 기다리는 중…</p><button id="mpLeave" class="btn">나가기</button></div>
+  </div>
+</section>
+<section id="mpResult" class="screen modal hidden">
+  <div class="card">
+    <h3 id="mpResultTitle">승리!</h3>
+    <p id="mpResultScore" class="big-score">2 : 1</p>
+    <table id="mpResultTable" class="score-table"></table>
+    <button id="mpResultBtn" class="btn primary">로비로</button>
   </div>
 </section>
 

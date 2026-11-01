@@ -299,7 +299,7 @@ export function updateWorld(dt) {
 // ── 모델 불러오기 ──────────────────────────────────────────
 export async function loadModels(onProgress) {
   const loader = new GLTFLoader();
-  const names = ['locomotive', 'bogie', 'bike2', 'bandit', 'walker', 'drone', 'rifle', 'props', 'train_props', 'car_flatgun', 'car_freight', 'car_flatrepair', 'car_passenger', 'car_caboose'];
+  const names = ['locomotive', 'bogie', 'bike2', 'bandit', 'walker', 'drone', 'rifle', 'shotgun', 'revolver', 'props', 'train_props', 'car_flatgun', 'car_freight', 'car_flatrepair', 'car_passenger', 'car_caboose'];
   let done = 0;
   await Promise.all(names.map(async (n) => {
     const g = await loader.loadAsync(`assets/models/${n}.glb`);
